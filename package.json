@@ -1,0 +1,53 @@
+{
+  "name": "openusage-grok",
+  "version": "0.1.1",
+  "description": "OpenUsage Grok — SuperGrok / xAI 多账号用量监控（Windows）",
+  "main": "electron/main.js",
+  "author": "chenzai666",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chenzai666/openusage-grok.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron script/smoke-billing.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win",
+    "release": "electron-builder --win && node script/publish-release.js"
+  },
+  "build": {
+    "appId": "com.openusage.grok",
+    "productName": "OpenUsage Grok",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "lib/**/*",
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        { "target": "portable", "arch": ["x64"] },
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "portable": {
+      "artifactName": "OpenUsage-Grok-${version}-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "OpenUsage-Grok-${version}-setup.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  }
+}

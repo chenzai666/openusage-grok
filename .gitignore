@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.*
+assets/tray-test.png
+*.asar
+.vscode/
+.idea/
