@@ -14,12 +14,13 @@
     "start": "electron .",
     "smoke": "electron script/smoke-billing.js",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --win",
-    "release": "electron-builder --win && node script/publish-release.js"
+    "dist": "electron-builder --win -p never",
+    "release": "electron-builder --win -p never && node script/publish-release.js"
   },
   "build": {
     "appId": "com.openusage.grok",
     "productName": "OpenUsage Grok",
+    "publish": null,
     "directories": {
       "output": "dist"
     },
