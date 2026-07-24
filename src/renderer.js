@@ -414,7 +414,11 @@
     $("#side-nav").hidden = !on;
     state.fullscreen = on;
   });
-  $("#btn-settings").addEventListener("click", () => setView("settings"));
+  // Titlebar gear: enter settings, or leave settings if already there
+  $("#btn-settings").addEventListener("click", () => {
+    if (state.view === "settings") setView("home");
+    else setView("settings");
+  });
   $("#btn-home-settings").addEventListener("click", () => setView("settings"));
   async function doRefresh() {
     $("#btn-refresh").disabled = true;
@@ -494,10 +498,6 @@
   $("#btn-import-cli").addEventListener("click", () => doSyncCli());
   $("#btn-settings-import-cli").addEventListener("click", () => doSyncCli());
   $("#btn-settings-home").addEventListener("click", () => setView("home"));
-  $("#btn-quit-app").addEventListener("click", async () => {
-    if (!confirm("确定退出 OpenUsage Grok？\n（仅隐藏面板请用右上角 —）")) return;
-    await openusage.quitApp();
-  });
 
   // Cards actions
   $("#cards").addEventListener("click", async (e) => {

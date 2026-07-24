@@ -23,7 +23,7 @@
           <span class="meta-text" id="refresh-meta"></span>
           <button type="button" class="icon-btn" id="btn-refresh" title="刷新">↻</button>
           <button type="button" class="icon-btn" id="btn-test-all" title="一键测试全部">🧪</button>
-          <button type="button" class="icon-btn" id="btn-settings" title="设置">⚙</button>
+          <button type="button" class="icon-btn" id="btn-settings" title="设置 / 退出设置">⚙</button>
           <button type="button" class="icon-btn" id="btn-fullscreen" title="全屏工作台">⛶</button>
           <button type="button" class="icon-btn" id="btn-hide" title="隐藏">—</button>
         </div>
@@ -181,12 +181,10 @@
                   说明：xAI 不返回 SuperGrok 订阅日历到期日，请用手动粘贴续费信息。部分账号 chat 可能 403（JWT
                   tier=1）。
                 </p>
-                <h3 class="mt">应用</h3>
-                <div class="row gap" style="margin-bottom: 8px; flex-wrap: wrap">
-                  <button type="button" class="btn sm" id="btn-settings-home">返回总览</button>
-                  <button type="button" class="btn sm danger" id="btn-quit-app">退出应用</button>
+                <div class="row gap" style="margin-top: 16px; margin-bottom: 8px; flex-wrap: wrap">
+                  <button type="button" class="btn primary" id="btn-settings-home">退出设置</button>
                 </div>
-                <p class="muted sm">关闭面板只会隐藏到托盘；点「退出应用」才会结束进程。</p>
+                <p class="muted sm">返回账号总览。结束程序请用托盘右键「退出」。</p>
               </div>
             </div>
           </section>

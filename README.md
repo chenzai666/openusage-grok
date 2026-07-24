@@ -12,7 +12,7 @@ Windows 托盘应用：仅监控 **Grok / SuperGrok** 多账号用量。
 - 应用内代理（自动 / 自定义 / 环境变量 / 系统 / 直连）
 - `%APPDATA%\OpenUsageGrok\accounts.json` DPAPI 加密
 - 启动/刷新自动同步 `~/.grok/auth.json`（只读合并，不覆盖 CLI；解密失败可从 CLI 重建）
-- 设置页：代理、同步 CLI、**退出应用**
+- 设置页：代理、同步 CLI、退出设置回总览
 - 手动粘贴续费文案（`Renews on … · billed via …`）
 
 ## 开发
