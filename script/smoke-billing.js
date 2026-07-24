@@ -11,8 +11,9 @@ app.whenReady().then(async () => {
     console.log("[smoke] proxy", resolveProxy(), resolved);
     const secure = require("../lib/secureAccounts");
     const billing = require("../lib/grokBilling");
-    const n = secure.softImportCli(true);
-    console.log("[smoke] soft-import added:", n);
+    const sync = secure.syncFromCli(true);
+    console.log("[smoke] cli-sync:", sync);
+    console.log("[smoke] cliAuthStatus:", secure.cliAuthStatus());
     console.log("[smoke] canEncrypt:", secure.canEncrypt());
     const entries = secure.listEntries();
     console.log(

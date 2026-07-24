@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld("openusage", {
   openPath: (which) => invoke("open-path", which),
   openExternal: (url) => invoke("open-external", url),
   hidePanel: () => invoke("hide-panel"),
+  quitApp: () => invoke("quit-app"),
   getFullscreen: () => invoke("get-fullscreen"),
   setFullscreen: (on) => invoke("set-fullscreen", on),
   toggleFullscreen: () => invoke("toggle-fullscreen"),

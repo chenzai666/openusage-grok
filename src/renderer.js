@@ -338,9 +338,48 @@
     $("#encrypt-status").textContent = st.encrypted
       ? "账号库：Windows DPAPI (safeStorage) 已加密"
       : "账号库：当前环境未启用加密（明文 envelope）";
+    const cli = st.cliAuth || {};
+    if (cli.exists) {
+      $("#cli-auth-status").textContent =
+        `CLI 凭证：已找到 ${cli.count || 0} 个账号 · ${cli.path || ""}`;
+      if ($("#cli-auth-hint")) {
+        $("#cli-auth-hint").textContent =
+          `检测到 ${cli.path}（${cli.count || 0} 个），可点「同步 Grok CLI 账号」。`;
+      }
+    } else {
+      $("#cli-auth-status").textContent =
+        `CLI 凭证：未找到 · 期望路径 ${cli.path || "%USERPROFILE%\\.grok\\auth.json"}`;
+      if ($("#cli-auth-hint")) {
+        $("#cli-auth-hint").textContent =
+          `未找到 CLI 凭证。请先在终端执行 grok login，文件应在：${cli.path || "~/.grok/auth.json"}`;
+      }
+    }
     $("#about-version").textContent = `OpenUsage Grok v${st.version || "?"}`;
     applyTheme(st.dark);
     await reloadProxyStatus();
+  }
+
+  function formatSyncResult(r) {
+    if (!r) return "同步失败：无返回";
+    if (r.error) return `同步失败：${r.error}\n路径：${r.path || ""}`;
+    if (!r.exists) return `未找到 CLI 文件：\n${r.path || ""}`;
+    let msg =
+      `已同步 CLI\n` +
+      `路径：${r.path}\n` +
+      `CLI 账号 ${r.cliCount} · 新增 ${r.added} · 更新令牌 ${r.updated} · 库内共 ${r.total}`;
+    if (r.recovered || r.recoverNote) {
+      msg += `\n\n注意：${r.recoverNote || r.message || "已从 CLI 重建无法解密的本地库"}`;
+    }
+    return msg;
+  }
+
+  async function doSyncCli() {
+    const r = await openusage.softImportCli();
+    alert(formatSyncResult(r));
+    await reloadAccounts();
+    await reloadSettings();
+    if (r && (r.added > 0 || r.updated > 0 || r.total > 0)) setView("home");
+    return r;
   }
 
   function updateRefreshMeta() {
@@ -452,11 +491,12 @@
     if (url) await openusage.copyText(url);
     $("#login-status").textContent = "链接已复制到剪贴板";
   });
-  $("#btn-import-cli").addEventListener("click", async () => {
-    const n = await openusage.softImportCli();
-    alert(n > 0 ? `已导入 ${n} 个账号` : "没有可导入的新账号");
-    await reloadAccounts();
-    if (n > 0) setView("home");
+  $("#btn-import-cli").addEventListener("click", () => doSyncCli());
+  $("#btn-settings-import-cli").addEventListener("click", () => doSyncCli());
+  $("#btn-settings-home").addEventListener("click", () => setView("home"));
+  $("#btn-quit-app").addEventListener("click", async () => {
+    if (!confirm("确定退出 OpenUsage Grok？\n（仅隐藏面板请用右上角 —）")) return;
+    await openusage.quitApp();
   });
 
   // Cards actions
@@ -672,12 +712,26 @@
   // boot
   (async () => {
     await reloadSettings();
+    // Prefer live sync so CLI accounts appear without extra click
+    try {
+      const r = await openusage.softImportCli();
+      console.log("[boot cli-sync]", r);
+    } catch (e) {
+      console.warn("[boot cli-sync]", e);
+    }
     await reloadAccounts();
     const st = await openusage.getStatus();
     if (st.lastUsage) {
       state.usage = st.lastUsage;
       renderCards();
       updateRefreshMeta();
+    } else if (state.accounts.length) {
+      // Trigger refresh if we have accounts but no usage yet
+      try {
+        await openusage.refreshUsage();
+      } catch {
+        /* ignore */
+      }
     }
     state.fullscreen = !!st.isFullscreen;
     document.getElementById("app").classList.toggle("fullscreen", state.fullscreen);

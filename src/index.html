@@ -46,7 +46,8 @@
               </p>
               <div id="login-idle">
                 <button type="button" class="btn primary" id="btn-start-login">开始登录</button>
-                <button type="button" class="btn ghost" id="btn-import-cli">从 Grok CLI 导入</button>
+                <button type="button" class="btn ghost" id="btn-import-cli">同步 Grok CLI 账号</button>
+                <p class="muted sm" id="cli-auth-hint" style="margin-top: 12px"></p>
               </div>
               <div id="login-pending" hidden>
                 <div class="code-box">
@@ -171,11 +172,21 @@
                   <button type="button" class="btn ghost sm" data-path="cliAuth">打开 .grok</button>
                 </div>
                 <p class="muted sm" id="encrypt-status">加密：检测中…</p>
+                <p class="muted sm" id="cli-auth-status">CLI：检测中…</p>
+                <div class="row gap" style="margin-bottom: 8px">
+                  <button type="button" class="btn sm" id="btn-settings-import-cli">同步 Grok CLI</button>
+                </div>
                 <p class="muted sm" id="about-version">OpenUsage Grok</p>
                 <p class="muted sm note">
                   说明：xAI 不返回 SuperGrok 订阅日历到期日，请用手动粘贴续费信息。部分账号 chat 可能 403（JWT
                   tier=1）。
                 </p>
+                <h3 class="mt">应用</h3>
+                <div class="row gap" style="margin-bottom: 8px; flex-wrap: wrap">
+                  <button type="button" class="btn sm" id="btn-settings-home">返回总览</button>
+                  <button type="button" class="btn sm danger" id="btn-quit-app">退出应用</button>
+                </div>
+                <p class="muted sm">关闭面板只会隐藏到托盘；点「退出应用」才会结束进程。</p>
               </div>
             </div>
           </section>

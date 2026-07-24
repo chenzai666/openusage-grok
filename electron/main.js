@@ -243,6 +243,12 @@ function createTray() {
 
 async function refreshAll(opts = {}) {
   try {
+    // Keep vault tokens aligned with CLI (Tauri-style live auth.json)
+    try {
+      secure.syncFromCli(true);
+    } catch (e) {
+      console.error("cli-sync on refresh", e);
+    }
     const result = await grokBilling.fetchAllUsage({ runChat: !!opts.runChat });
     lastUsage = result;
     updateTrayIcon(result.trayPercent);
@@ -322,6 +328,7 @@ function registerIpc() {
       isFullscreen,
       dark: nativeTheme.shouldUseDarkColors,
       proxy: resolveProxy(),
+      cliAuth: secure.cliAuthStatus(),
     };
   });
 
@@ -525,10 +532,12 @@ function registerIpc() {
   ipcMain.handle("refresh-usage", async (_e, opts) => refreshAll(opts || {}));
 
   ipcMain.handle("soft-import-cli", async () => {
-    const n = secure.softImportCli(true);
+    const result = secure.syncFromCli(true);
     panel?.webContents.send("accounts-changed");
-    if (n > 0) await refreshAll().catch(() => {});
-    return n;
+    if (result.added > 0 || result.updated > 0 || result.total > 0) {
+      await refreshAll().catch(() => {});
+    }
+    return result;
   });
 
   ipcMain.handle("open-path", async (_e, which) => {
@@ -558,6 +567,12 @@ function registerIpc() {
     return true;
   });
 
+  ipcMain.handle("quit-app", async () => {
+    isQuitting = true;
+    app.quit();
+    return true;
+  });
+
   ipcMain.handle("get-fullscreen", async () => isFullscreen);
   ipcMain.handle("set-fullscreen", async (_e, on) => {
     setFullscreenMode(!!on);
@@ -583,14 +598,30 @@ app.whenReady().then(async () => {
   createPanel();
   createTray();
 
-  // Soft-import CLI accounts once
+  // Sync tokens from Grok CLI auth.json (same path as Tauri: ~/.grok/auth.json)
   try {
-    secure.softImportCli(true);
+    const sync = secure.syncFromCli(true);
+    console.log("[cli-sync]", sync);
   } catch (e) {
-    console.error("softImport", e);
+    console.error("cli-sync", e);
   }
 
   const cfg = settings.load();
+  // Ensure tray/active account is set when vault has entries but config is empty
+  try {
+    const entries = secure.listEntries();
+    if (entries.length > 0) {
+      const activeStillThere =
+        cfg.activeEntryKey && entries.some((e) => e.entryKey === cfg.activeEntryKey);
+      if (!activeStillThere) {
+        settings.save({ activeEntryKey: entries[0].entryKey });
+        console.log("[cli-sync] activeEntryKey ->", entries[0].entryKey);
+      }
+    }
+  } catch (e) {
+    console.error("active account init", e);
+  }
+
   try {
     app.setLoginItemSettings({ openAtLogin: !!cfg.launchAtLogin });
   } catch {
@@ -598,11 +629,15 @@ app.whenReady().then(async () => {
   }
 
   scheduleRefresh();
-  refreshAll().catch(console.error);
-
-  // optional: show on first launch if no accounts
-  const n = secure.listEntries().length;
-  if (n === 0) showPanel();
+  refreshAll()
+    .then(() => {
+      // Always show panel after first load so user sees CLI accounts immediately
+      showPanel();
+    })
+    .catch((e) => {
+      console.error(e);
+      showPanel();
+    });
 });
 
 app.on("before-quit", () => {

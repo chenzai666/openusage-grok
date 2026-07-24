@@ -1,6 +1,6 @@
 {
   "name": "openusage-grok",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "OpenUsage Grok — SuperGrok / xAI 多账号用量监控（Windows）",
   "main": "electron/main.js",
   "author": "chenzai666",
@@ -34,8 +34,18 @@
     "win": {
       "signAndEditExecutable": false,
       "target": [
-        { "target": "portable", "arch": ["x64"] },
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "portable": {
