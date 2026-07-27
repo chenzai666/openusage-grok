@@ -293,8 +293,12 @@ function startLoginPoll() {
       if (st.state === "complete") {
         clearInterval(loginPollTimer);
         loginPollTimer = null;
+        // Keep other accounts; mark newly logged-in as tray/active
+        if (st.entryKey) {
+          settings.save({ activeEntryKey: st.entryKey });
+        }
         panel?.webContents.send("accounts-changed");
-        await refreshAll();
+        await refreshAll({ skipCliSync: false });
       } else if (st.state === "expired" || st.state === "cancelled") {
         clearInterval(loginPollTimer);
         loginPollTimer = null;
