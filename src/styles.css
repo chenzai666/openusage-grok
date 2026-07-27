@@ -118,6 +118,8 @@ a {
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-muted);
   border: 1px solid var(--border);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 html.light .meta-pill {
@@ -387,24 +389,25 @@ html.light .icon-btn:hover {
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
 }
 
+/* 账号卡片固定深色（与参考图一致），不随外壳浅色主题变白底 */
 .acc-card {
-  background: #121212;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  --card-bg: #121212;
+  --card-fg: rgba(255, 255, 255, 0.92);
+  --card-muted: rgba(255, 255, 255, 0.45);
+  --card-dim: rgba(255, 255, 255, 0.32);
+  --card-border: rgba(255, 255, 255, 0.1);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
   border-radius: 16px;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
   min-width: 0;
   overflow: hidden;
-  color: #fff;
-}
-html.light .acc-card {
-  background: var(--bg-card);
-  box-shadow: var(--shadow);
-  color: var(--text);
+  color: var(--card-fg);
 }
 .acc-card:hover {
   border-color: rgba(255, 255, 255, 0.16);
@@ -436,9 +439,6 @@ html.light .acc-card {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
-}
-html.light .email-blur {
-  color: rgba(0, 0, 0, 0.35);
 }
 
 .card-head {
@@ -484,6 +484,7 @@ html.light .avatar {
   font-weight: 600;
   letter-spacing: 0.02em;
   line-height: 1.2;
+  white-space: nowrap;
 }
 .badge.xai {
   background: transparent;
@@ -519,7 +520,7 @@ html.light .avatar {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: #fff;
+  color: rgba(255, 255, 255, 0.95);
 }
 
 .plan-line {
@@ -634,6 +635,7 @@ html.light .unified-note {
 .metric-label {
   color: rgba(255, 255, 255, 0.45);
   flex-shrink: 0;
+  white-space: nowrap;
 }
 .metric-value {
   color: rgba(255, 255, 255, 0.88);
@@ -682,6 +684,7 @@ html.light .unified-note {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.45);
   flex-shrink: 0;
+  white-space: nowrap;
 }
 .health-dots {
   display: flex;

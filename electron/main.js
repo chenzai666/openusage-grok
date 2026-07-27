@@ -51,14 +51,20 @@ if (!gotLock) {
 
 function applyTheme() {
   const cfg = settings.load();
-  const theme = cfg.theme || "system";
+  let theme = cfg.theme || "dark";
+  // 历史配置 system+浅色系统 会导致白底白字；首次拉起纠正为 dark
+  if (theme === "system" && !nativeTheme.shouldUseDarkColors) {
+    theme = "dark";
+    settings.save({ theme: "dark" });
+  }
   if (theme === "dark") nativeTheme.themeSource = "dark";
   else if (theme === "light") nativeTheme.themeSource = "light";
   else nativeTheme.themeSource = "system";
   if (panel && !panel.isDestroyed()) {
     panel.webContents.send("theme-changed", {
       theme,
-      shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
+      // 卡片始终按深色可读渲染；外壳可随主题
+      shouldUseDarkColors: theme === "light" ? false : true,
     });
   }
 }

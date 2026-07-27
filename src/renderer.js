@@ -23,7 +23,9 @@
   }
 
   function applyTheme(shouldDark) {
-    document.documentElement.classList.toggle("light", !shouldDark);
+    // shouldDark === true → 深色（去掉 .light）
+    document.documentElement.classList.toggle("light", shouldDark === false);
+    document.documentElement.classList.toggle("dark", shouldDark !== false);
   }
 
   function setView(name) {
@@ -181,8 +183,8 @@
               <span class="badge ${statusClass(acc.status)}">${esc(acc.status || "—")}</span>
               ${tags}
             </div>
-            <div class="card-title">${esc(acc.title || acc.emailMasked)}</div>
-            <div class="email-blur" title="${esc(acc.emailMasked || "")}">${esc(acc.emailMasked || "")}</div>
+            <div class="card-title">${esc(acc.title || acc.emailMasked || "未命名账号")}</div>
+            <div class="email-blur" title="${esc(acc.emailMasked || "")}">${esc(acc.emailMasked || "—")}</div>
           </div>
         </div>
         <div class="plan-line">${esc(planLine)}</div>
