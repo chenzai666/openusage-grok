@@ -78,19 +78,30 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px 8px;
+  gap: 10px;
+  padding: 10px 10px 10px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elevated);
   flex-shrink: 0;
+  min-height: 48px;
+  box-sizing: border-box;
 }
 
-.titlebar-left,
+.titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
 .titlebar-right {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
+  gap: 2px;
+  flex: 0 0 auto;
+  flex-shrink: 0;
 }
 
 .logo-mark {
@@ -109,10 +120,34 @@ a {
   display: block;
 }
 
+/* 标题 + 账号数同一行；刷新时间单独第二行，避免挤成竖排/重叠 */
+.title-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
 .app-title {
   font-weight: 600;
   font-size: 13px;
   letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 0;
+  line-height: 1.25;
 }
 
 .meta-pill {
@@ -123,20 +158,29 @@ a {
   color: var(--text-muted);
   border: 1px solid var(--border);
   white-space: nowrap;
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  line-height: 1.3;
+  writing-mode: horizontal-tb;
 }
 
 html.light .meta-pill {
   background: rgba(0, 0, 0, 0.04);
 }
 
-.meta-text {
+.meta-text,
+.title-sub {
   font-size: 11px;
   color: var(--text-dim);
-  max-width: 180px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;
+  line-height: 1.3;
+  min-height: 0;
+}
+
+.title-sub:empty {
+  display: none;
 }
 
 .icon-btn {

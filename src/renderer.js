@@ -332,7 +332,8 @@
 
   async function reloadAccounts() {
     state.accounts = await openusage.listAccounts();
-    $("#account-count").textContent = `${state.accounts.length} 账号`;
+    const n = state.accounts.length;
+    $("#account-count").textContent = n === 1 ? "1 账号" : `${n} 账号`;
     renderAccountList();
   }
 
