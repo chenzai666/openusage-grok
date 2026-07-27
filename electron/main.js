@@ -88,6 +88,7 @@ function createPanel() {
     alwaysOnTop: true,
     transparent: false,
     backgroundColor: "#0a0a0a",
+    // Avoid OS animating from (0,0) — we set bounds before show
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -98,19 +99,32 @@ function createPanel() {
 
   panel.loadFile(path.join(__dirname, "..", "src", "index.html"));
 
+  // Park off-screen until first positioned show (prevents "flying" from 0,0)
+  try {
+    panel.setPosition(-32000, -32000);
+  } catch {
+    /* ignore */
+  }
+
   panel.on("blur", () => {
     if (isFullscreen || isQuitting) return;
     // small delay so clicks on tray still work
     setTimeout(() => {
       if (!panel || panel.isDestroyed() || isFullscreen) return;
       if (!panel.isFocused()) panel.hide();
-    }, 150);
+    }, 180);
   });
 
   panel.on("resized", () => {
     if (isFullscreen || !panel || panel.isDestroyed()) return;
     const b = panel.getBounds();
     settings.save({ panelWidth: b.width, panelHeight: b.height });
+    // Keep bottom-right glued to taskbar after user resize
+    positionNearTaskbar();
+  });
+
+  panel.on("moved", () => {
+    // User drag is rare (frameless); ignore while fullscreen
   });
 
   panel.on("close", (e) => {
@@ -119,23 +133,68 @@ function createPanel() {
       panel.hide();
     }
   });
+
+  panel.once("ready-to-show", () => {
+    positionNearTaskbar();
+  });
 }
 
-function positionNearTray() {
-  if (!panel || panel.isDestroyed()) return;
-  const display = screen.getPrimaryDisplay();
-  const wa = display.workArea;
+/**
+ * Snap panel to bottom-right of the work area (above taskbar / near tray).
+ * Uses the display under the cursor (tray clicks), not always primary —
+ * avoids multi-monitor "window flies to the wrong screen".
+ */
+function positionNearTaskbar() {
+  if (!panel || panel.isDestroyed() || isFullscreen) return;
+
+  let display;
+  try {
+    const pt = screen.getCursorScreenPoint();
+    display = screen.getDisplayNearestPoint(pt);
+  } catch {
+    display = screen.getPrimaryDisplay();
+  }
+  if (!display) display = screen.getPrimaryDisplay();
+
+  const wa = display.workArea; // excludes taskbar
   const b = panel.getBounds();
-  // bottom-right near typical Windows tray
-  const x = Math.round(wa.x + wa.width - b.width - 12);
-  const y = Math.round(wa.y + wa.height - b.height - 8);
-  panel.setPosition(Math.max(wa.x, x), Math.max(wa.y, y));
+  const margin = 8;
+  const x = Math.round(wa.x + wa.width - b.width - margin);
+  const y = Math.round(wa.y + wa.height - b.height - margin);
+
+  // Clamp fully inside work area
+  const clampedX = Math.min(Math.max(wa.x + margin, x), wa.x + wa.width - b.width - margin);
+  const clampedY = Math.min(Math.max(wa.y + margin, y), wa.y + wa.height - b.height - margin);
+
+  panel.setBounds(
+    {
+      x: Math.round(clampedX),
+      y: Math.round(clampedY),
+      width: b.width,
+      height: b.height,
+    },
+    false
+  );
+}
+
+/** @deprecated name kept for call sites */
+function positionNearTray() {
+  positionNearTaskbar();
 }
 
 function showPanel() {
   if (!panel || panel.isDestroyed()) createPanel();
-  if (!isFullscreen) positionNearTray();
+  if (!isFullscreen) {
+    // Position while still hidden when possible to avoid jump/flash
+    positionNearTaskbar();
+  }
   panel.show();
+  if (!isFullscreen) {
+    // Re-assert after show (DPI / WM may nudge once)
+    setTimeout(() => {
+      if (!isFullscreen) positionNearTaskbar();
+    }, 16);
+  }
   panel.focus();
   panel.webContents.send("panel-shown");
 }
@@ -149,7 +208,12 @@ function setFullscreenMode(on) {
   isFullscreen = !!on;
   if (isFullscreen) {
     compactBounds = panel.getBounds();
-    const display = screen.getDisplayMatching(compactBounds) || screen.getPrimaryDisplay();
+    let display;
+    try {
+      display = screen.getDisplayMatching(compactBounds) || screen.getPrimaryDisplay();
+    } catch {
+      display = screen.getPrimaryDisplay();
+    }
     const wa = display.workArea;
     panel.setAlwaysOnTop(false);
     panel.setSkipTaskbar(false);
@@ -159,13 +223,13 @@ function setFullscreenMode(on) {
   } else {
     panel.setAlwaysOnTop(true);
     panel.setSkipTaskbar(true);
-    if (compactBounds) {
-      panel.setBounds(compactBounds);
-    } else {
-      const cfg = settings.load();
-      panel.setSize(cfg.panelWidth || 420, cfg.panelHeight || 640);
-      positionNearTray();
-    }
+    const cfg = settings.load();
+    const w = Math.max(360, cfg.panelWidth || 420);
+    const h = Math.max(480, cfg.panelHeight || 640);
+    panel.setSize(w, h);
+    // Always re-snap to taskbar — do not restore old bounds (causes "flying")
+    positionNearTaskbar();
+    panel.show();
   }
   panel.webContents.send("fullscreen-changed", isFullscreen);
 }
@@ -238,8 +302,12 @@ function createTray() {
       showPanel();
       return;
     }
-    if (panel.isVisible() && !isFullscreen) hidePanel();
-    else showPanel();
+    if (panel.isVisible() && !isFullscreen) {
+      hidePanel();
+    } else {
+      // Always re-anchor to taskbar on open (cursor is near tray)
+      showPanel();
+    }
   });
   tray.on("right-click", () => {
     tray.setContextMenu(buildTrayMenu());
