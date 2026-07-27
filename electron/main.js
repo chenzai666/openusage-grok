@@ -243,11 +243,13 @@ function createTray() {
 
 async function refreshAll(opts = {}) {
   try {
-    // Keep vault tokens aligned with CLI (Tauri-style live auth.json)
-    try {
-      secure.syncFromCli(true);
-    } catch (e) {
-      console.error("cli-sync on refresh", e);
+    // Merge CLI tokens only — never drops vault-only (device-login) accounts
+    if (opts.skipCliSync !== true) {
+      try {
+        secure.syncFromCli(true);
+      } catch (e) {
+        console.error("cli-sync on refresh", e);
+      }
     }
     const result = await grokBilling.fetchAllUsage({ runChat: !!opts.runChat });
     lastUsage = result;
@@ -379,6 +381,10 @@ function registerIpc() {
       subscription: grokBilling.formatSubscriptionLine(entry),
       tier: entry.tier ?? null,
       plan_name: entry.plan_name || null,
+      planLine:
+        entry.tier != null
+          ? `tier ${entry.tier}${entry.plan_name ? " · " + entry.plan_name : ""}`
+          : entry.plan_name || null,
       enabled: cfg.activeEntryKey === entryKey,
       source: entry.source || null,
     }));
@@ -401,14 +407,32 @@ function registerIpc() {
   });
 
   ipcMain.handle("remove-account", async (_e, entryKey) => {
+    // Tombstone so CLI soft-sync won't re-add; do not run syncFromCli right after
     const ok = secure.removeEntry(entryKey);
     const cfg = settings.load();
     if (cfg.activeEntryKey === entryKey) {
       const left = secure.listEntries();
       settings.save({ activeEntryKey: left[0]?.entryKey || null });
     }
+    // Drop deleted card from lastUsage immediately
+    if (lastUsage && Array.isArray(lastUsage.accounts)) {
+      lastUsage.accounts = lastUsage.accounts.filter((a) => a.entryKey !== entryKey);
+      lastUsage.trayEntryKey = settings.load().activeEntryKey;
+      const tray = lastUsage.accounts.find((a) => a.entryKey === lastUsage.trayEntryKey);
+      lastUsage.trayPercent = tray?.weeklyPercent ?? null;
+      updateTrayIcon(lastUsage.trayPercent);
+      panel?.webContents.send("usage-result", lastUsage);
+    }
     panel?.webContents.send("accounts-changed");
-    await refreshAll().catch(() => {});
+    // Refresh remaining only — skip full CLI re-import wipe path
+    try {
+      const result = await grokBilling.fetchAllUsage({ runChat: false });
+      lastUsage = result;
+      updateTrayIcon(result.trayPercent);
+      panel?.webContents.send("usage-result", result);
+    } catch (e) {
+      console.error("refresh after remove", e);
+    }
     return ok;
   });
 
@@ -515,7 +539,7 @@ function registerIpc() {
       settings.save({ activeEntryKey: left[0]?.entryKey || null });
     }
     panel?.webContents.send("accounts-changed");
-    await refreshAll().catch(() => {});
+    await refreshAll({ skipCliSync: true }).catch(() => {});
     return true;
   });
 

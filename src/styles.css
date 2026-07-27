@@ -493,6 +493,11 @@ html.light .avatar {
 .badge.tag {
   background: rgba(255, 255, 255, 0.05);
 }
+.badge.tier {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.4);
+  background: rgba(52, 211, 153, 0.1);
+}
 
 .card-title {
   margin-top: 4px;

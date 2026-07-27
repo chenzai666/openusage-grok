@@ -138,8 +138,19 @@
         ? `已用 ${Math.round(acc.apiPercent || 0)}% · ${acc.apiUsed} / ${acc.apiLimit}` +
           (acc.apiReset ? ` · 重置 ${acc.apiReset}` : "")
         : "接口未返回 API 字段";
-    const planLine =
-      (acc.planLine || "Grok") + (acc.refreshedAt ? " · 刷新 " + acc.refreshedAt : "");
+    // 层级 / 套餐：优先 planLine，否则拼 tier + planName
+    let planCore = (acc.planLine && String(acc.planLine).trim()) || "";
+    if (!planCore) {
+      const parts = [];
+      if (acc.tier != null && acc.tier !== "") parts.push("tier " + acc.tier);
+      if (acc.planName) parts.push(acc.planName);
+      planCore = parts.join(" · ") || "Grok";
+    }
+    const planLine = planCore + (acc.refreshedAt ? " · 刷新 " + acc.refreshedAt : "");
+    const tierBadge =
+      acc.tier != null && acc.tier !== ""
+        ? `<span class="badge tier" title="JWT 层级">tier ${esc(acc.tier)}</span>`
+        : "";
 
     return `<article class="acc-card" data-key="${esc(acc.entryKey)}">
       <div class="card-head">
@@ -149,6 +160,7 @@
           <div class="head-row">
             <span class="badge xai">xAI</span>
             <span class="badge ${statusClass(acc.status)}">${esc(acc.status || "—")}</span>
+            ${tierBadge}
             ${tags}
             ${dateChip ? `<span class="badge tag">${esc(dateChip)}</span>` : ""}
           </div>
@@ -522,9 +534,14 @@
       await reloadAccounts();
       openEditModal(key);
     } else if (act === "delete") {
-      if (!confirm("删除该账号？")) return;
+      if (!confirm("从本应用删除该账号？\n（不会修改 Grok CLI 的 auth.json；若曾从 CLI 导入，删除后不会自动再同步回来）")) return;
       await openusage.removeAccount(key);
       await reloadAccounts();
+      // usage-result already pushed by main; re-render if needed
+      if (state.usage?.accounts) {
+        state.usage.accounts = state.usage.accounts.filter((a) => a.entryKey !== key);
+        renderCards();
+      }
     } else if (act === "enable") {
       const on = btn.checked;
       if (on) await openusage.setActiveAccount(key);
