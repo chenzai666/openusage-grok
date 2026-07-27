@@ -50,6 +50,7 @@
       percent == null || !Number.isFinite(percent)
         ? null
         : Math.max(0, Math.min(100, percent));
+    // remaining health left→right (0% used → almost all lit)
     const filled =
       pct == null ? 0 : pct >= 100 ? 0 : Math.max(1, Math.round(((100 - pct) / 100) * total));
     let dots = "";
@@ -90,20 +91,21 @@
     if (!probe || (!probe.billing && !probe.settings && !probe.chat && !probe.testedAt)) {
       return "";
     }
+    const mark = (ok, code) => (ok ? "✓ " + (code || "") : "✗ " + (code || "—"));
     const tags = [];
     if (probe.billing) {
       tags.push(
-        `<span class="ptag ${probe.billing.ok ? "ok" : "bad"}">billing ${probe.billing.ok ? "✓" : "✗"} ${probe.billing.code || ""}</span>`
+        `<span class="ptag ${probe.billing.ok ? "ok" : "bad"}">billing ${mark(probe.billing.ok, probe.billing.code)}</span>`
       );
     }
     if (probe.settings) {
       tags.push(
-        `<span class="ptag ${probe.settings.ok ? "ok" : "bad"}">settings ${probe.settings.ok ? "✓" : "✗"} ${probe.settings.code || ""}</span>`
+        `<span class="ptag ${probe.settings.ok ? "ok" : "bad"}">settings ${mark(probe.settings.ok, probe.settings.code)}</span>`
       );
     }
     if (probe.chat) {
       tags.push(
-        `<span class="ptag ${probe.chat.ok ? "ok" : "bad"}">chat ${probe.chat.ok ? "✓" : "✗"} ${probe.chat.code || ""}</span>`
+        `<span class="ptag ${probe.chat.ok ? "ok" : "bad"}">chat ${mark(probe.chat.ok, probe.chat.code)}</span>`
       );
     }
     return `<div class="probe-box">
@@ -111,9 +113,18 @@
         <span class="chip ok">成功 ${probe.ok ?? 0}</span>
         <span class="chip fail">失败 ${probe.fail ?? 0}</span>
       </div>
-      <div class="probe-tags">${tags.join("")}</div>
+      ${tags.length ? `<div class="probe-tags">${tags.join("")}</div>` : ""}
       ${probe.note ? `<div class="probe-note">${esc(probe.note)}</div>` : ""}
       ${probe.testedAt ? `<div class="probe-time">${esc(probe.testedAt)}</div>` : ""}
+    </div>`;
+  }
+
+  /** 圆形 monochrome xAI 标记（对齐参考 UI） */
+  function avatarMark() {
+    return `<div class="avatar" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="18" height="18" fill="none">
+        <path d="M8 8l16 16M24 8L8 24" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+      </svg>
     </div>`;
   }
 
@@ -121,9 +132,6 @@
     const tags = (acc.labels || [])
       .map((t) => `<span class="badge tag">${esc(t)}</span>`)
       .join("");
-    const dateChip = acc.subscription
-      ? acc.subscription.split("·")[0]?.trim()
-      : null;
     const weeklyVal =
       acc.weeklyPercent != null
         ? `已用 ${Math.round(acc.weeklyPercent)}%` +
@@ -133,67 +141,76 @@
       acc.buildPercent != null
         ? `已用 ${Math.round(acc.buildPercent)}%`
         : acc.buildText || "接口未返回 Build 字段";
+    // 参考：API 月额度  已用 0% · 69 / 15000 · 重置 …
     const apiVal =
       acc.apiUsed != null && acc.apiLimit != null
         ? `已用 ${Math.round(acc.apiPercent || 0)}% · ${acc.apiUsed} / ${acc.apiLimit}` +
           (acc.apiReset ? ` · 重置 ${acc.apiReset}` : "")
         : "接口未返回 API 字段";
-    // 层级 / 套餐：优先 planLine，否则拼 tier + planName
-    let planCore = (acc.planLine && String(acc.planLine).trim()) || "";
-    if (!planCore) {
-      const parts = [];
-      if (acc.tier != null && acc.tier !== "") parts.push("tier " + acc.tier);
-      if (acc.planName) parts.push(acc.planName);
-      planCore = parts.join(" · ") || "Grok";
+    const onDemand =
+      acc.onDemandText || "已用 -- · US$0.00 / --";
+
+    // 参考：tier 1 · SuperGrok · 刷新 07/17 15:31（层级在文案行，不单独塞绿徽章抢状态位）
+    const planParts = [];
+    if (acc.tier != null && acc.tier !== "") planParts.push("tier " + acc.tier);
+    if (acc.planName) planParts.push(acc.planName);
+    else if (acc.planLine) {
+      // strip leading tier if already added
+      const pl = String(acc.planLine).replace(/^tier\s*\d+\s*·\s*/i, "").trim();
+      if (pl && !planParts.includes(pl)) planParts.push(pl.split("·")[0].trim());
     }
-    const planLine = planCore + (acc.refreshedAt ? " · 刷新 " + acc.refreshedAt : "");
-    const tierBadge =
-      acc.tier != null && acc.tier !== ""
-        ? `<span class="badge tier" title="JWT 层级">tier ${esc(acc.tier)}</span>`
-        : "";
+    if (!planParts.length) planParts.push("Grok");
+    if (acc.refreshedAt) planParts.push("刷新 " + acc.refreshedAt);
+    const planLine = planParts.join(" · ");
+
+    const subLine = acc.subscription
+      ? `<div class="metric"><div class="metric-row">
+          <span class="metric-label">到期/续费</span>
+          <span class="metric-value">${esc(acc.subscription)}</span>
+        </div></div>`
+      : "";
 
     return `<article class="acc-card" data-key="${esc(acc.entryKey)}">
-      <div class="card-head">
-        <input type="checkbox" class="tray-check" data-act="enable" title="设为托盘账号" ${acc.enabled ? "checked" : ""} />
-        <div class="avatar">xAI</div>
-        <div class="head-main">
-          <div class="head-row">
-            <span class="badge xai">xAI</span>
-            <span class="badge ${statusClass(acc.status)}">${esc(acc.status || "—")}</span>
-            ${tierBadge}
-            ${tags}
-            ${dateChip ? `<span class="badge tag">${esc(dateChip)}</span>` : ""}
+      <div class="card-body">
+        <div class="card-head">
+          <input type="checkbox" class="tray-check" data-act="enable" title="设为托盘账号" ${acc.enabled ? "checked" : ""} />
+          ${avatarMark()}
+          <div class="head-main">
+            <div class="head-row">
+              <span class="badge xai">xAI</span>
+              <span class="badge ${statusClass(acc.status)}">${esc(acc.status || "—")}</span>
+              ${tags}
+            </div>
+            <div class="card-title">${esc(acc.title || acc.emailMasked)}</div>
+            <div class="email-blur" title="${esc(acc.emailMasked || "")}">${esc(acc.emailMasked || "")}</div>
           </div>
-          <div class="card-title">${esc(acc.title || acc.emailMasked)}</div>
-          <div class="email-blur">${esc(acc.emailMasked || "")}</div>
-          <div class="plan-line">${esc(planLine)}</div>
-          ${acc.unifiedNote ? `<div class="unified-note">ⓘ ${esc(acc.unifiedNote)}</div>` : ""}
-          ${acc.error ? `<div class="unified-note">${esc(acc.error)}</div>` : ""}
-          ${probeHtml(acc.probe)}
         </div>
+        <div class="plan-line">${esc(planLine)}</div>
+        ${acc.unifiedNote ? `<div class="unified-note"><span class="uni-ico">ⓘ</span><span>${esc(acc.unifiedNote)}</span></div>` : ""}
+        ${acc.error ? `<div class="unified-note"><span class="uni-ico">ⓘ</span><span>${esc(acc.error)}</span></div>` : ""}
+        ${probeHtml(acc.probe)}
       </div>
-      ${healthDotsHtml(acc.weeklyPercent)}
-      ${metric("周限额", weeklyVal, acc.weeklyPercent, acc.weeklyPercent == null)}
-      ${metric("Build 用量", buildVal, acc.buildPercent, acc.buildPercent == null)}
-      ${metric("API 月额度", apiVal, acc.apiPercent, acc.apiPercent == null)}
-      ${metric("按量已用", acc.onDemandText || "已用 -- · US$0.00 / --", null, false)}
-      <div class="footer-meta">
-        <span title="${esc(acc.parseSummary || "")}">${esc(acc.parseSummary || "")}</span>
+      <div class="card-metrics">
+        ${healthDotsHtml(acc.weeklyPercent)}
+        ${metric("周限额", weeklyVal, acc.weeklyPercent, acc.weeklyPercent == null)}
+        ${metric("Build 用量", buildVal, acc.buildPercent, acc.buildPercent == null)}
+        ${metric("API 月额度", apiVal, acc.apiPercent, acc.apiPercent == null)}
+        ${metric("按量已用", onDemand, null, true)}
+        ${
+          acc.parseSummary
+            ? `<p class="parse-summary" title="${esc(acc.parseSummary)}">${esc(acc.parseSummary)}</p>`
+            : ""
+        }
+        ${metric("按量付费", acc.payAsYouGo || "未启用", null, (acc.payAsYouGo || "未启用") === "未启用")}
+        ${subLine}
       </div>
-      <div class="footer-meta">
-        <span>按量付费</span>
-        <span>${esc(acc.payAsYouGo || "未启用")}</span>
-      </div>
-      ${
-        acc.subscription
-          ? `<div class="footer-meta"><span>到期/续费</span><span>${esc(acc.subscription)}</span></div>`
-          : ""
-      }
       <div class="card-actions">
-        <button type="button" class="act-btn wide" data-act="test" title="API 测试">◎ 测试</button>
+        <button type="button" class="act-btn wide" data-act="test" title="接口探测 + 刷新">
+          <span class="ico">◎</span> 测试
+        </button>
         <button type="button" class="act-btn" data-act="reauth" title="重新登录">↻</button>
-        <button type="button" class="act-btn" data-act="edit" title="设置">⚙</button>
-        <button type="button" class="act-btn danger" data-act="delete" title="删除">🗑</button>
+        <button type="button" class="act-btn" data-act="edit" title="账号设置">⚙</button>
+        <button type="button" class="act-btn danger" data-act="delete" title="删除账号">🗑</button>
         <span class="spacer"></span>
         <label class="toggle" title="设为托盘账号">
           <span>启用</span>
