@@ -103,6 +103,10 @@ a {
   font-size: 12px;
   display: grid;
   place-items: center;
+  flex-shrink: 0;
+}
+.logo-mark .grok-mark {
+  display: block;
 }
 
 .app-title {
@@ -455,8 +459,11 @@ html.light .icon-btn:hover {
   border: 1px solid rgba(255, 255, 255, 0.15);
   display: grid;
   place-items: center;
-  color: rgba(255, 255, 255, 0.92);
+  color: rgba(255, 255, 255, 0.95);
   flex-shrink: 0;
+}
+.avatar .grok-mark {
+  display: block;
 }
 html.light .avatar {
   background: #111;

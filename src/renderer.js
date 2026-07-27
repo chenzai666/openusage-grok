@@ -121,11 +121,19 @@
     </div>`;
   }
 
-  /** 圆形 monochrome xAI 标记（对齐参考 UI） */
+  /**
+   * Grok 官方品牌几何标（与 openusage-windows/plugins/grok/icon.svg 同源）
+   * 不是 Twitter/X 的叉号。
+   */
   function avatarMark() {
-    return `<div class="avatar" aria-hidden="true">
-      <svg viewBox="0 0 32 32" width="18" height="18" fill="none">
-        <path d="M8 8l16 16M24 8L8 24" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+    return `<div class="avatar" aria-hidden="true" title="Grok">
+      <svg class="grok-mark" viewBox="0 0 727.27 778.68" width="20" height="22" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+        <g transform="translate(-134,-113.32)">
+          <polygon points="508.67 574.07 761.27 213.32 639.19 213.32 447.64 486.9"/>
+          <polygon points="356.08 792 417.12 704.83 356.08 617.66 234 792"/>
+          <polygon points="508.67 792 630.75 792 356.08 399.72 234 399.72"/>
+          <polygon points="761.27 256.91 661.27 399.72 671.27 792 751.27 792"/>
+        </g>
       </svg>
     </div>`;
   }
