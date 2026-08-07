@@ -406,9 +406,22 @@
     let msg =
       `已同步 CLI\n` +
       `路径：${r.path}\n` +
-      `CLI 账号 ${r.cliCount} · 新增 ${r.added} · 更新令牌 ${r.updated} · 库内共 ${r.total}`;
+      `CLI 账号 ${r.cliCount} · 新增 ${r.added} · 更新令牌 ${r.updated}` +
+      (r.migrated ? ` · 迁移 ${r.migrated}` : "") +
+      ` · 库内共 ${r.total}`;
+    if (r.tombstoned > 0) {
+      msg += `\n跳过已删除 ${r.tombstoned} 个（同邮箱/用户不会自动加回）`;
+    }
+    if (r.prunedTombs > 0) {
+      msg += `\n已清理 ${r.prunedTombs} 条错误的「短 key」删除记录（此前会导致 CLI 账号无法再导入）`;
+    }
     if (r.recovered || r.recoverNote) {
       msg += `\n\n注意：${r.recoverNote || r.message || "已从 CLI 重建无法解密的本地库"}`;
+    } else if (r.message && r.added === 0 && r.updated === 0) {
+      msg += `\n\n${r.message}`;
+    }
+    if (Array.isArray(r.emails) && r.emails.length) {
+      msg += `\nCLI 邮箱：${r.emails.join(", ")}`;
     }
     return msg;
   }
