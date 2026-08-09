@@ -1,6 +1,6 @@
 {
   "name": "openusage-grok",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "OpenUsage Grok — SuperGrok / xAI 多账号用量监控（Windows）",
   "main": "electron/main.js",
   "author": "chenzai666",

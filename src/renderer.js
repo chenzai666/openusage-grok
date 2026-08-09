@@ -380,11 +380,13 @@
       : "账号库：当前环境未启用加密（明文 envelope）";
     const cli = st.cliAuth || {};
     if (cli.exists) {
+      const emails = Array.isArray(cli.emails) && cli.emails.length ? ` · ${cli.emails.join(", ")}` : "";
       $("#cli-auth-status").textContent =
-        `CLI 凭证：已找到 ${cli.count || 0} 个账号 · ${cli.path || ""}`;
+        `CLI 凭证：已找到 ${cli.count || 0} 个账号${emails}`;
       if ($("#cli-auth-hint")) {
         $("#cli-auth-hint").textContent =
-          `检测到 ${cli.path}（${cli.count || 0} 个），可点「同步 Grok CLI 账号」。`;
+          `已检测到本地 ${cli.path}（${cli.count || 0} 个）。` +
+          `本地 grok login 后点「同步 Grok CLI」即可拉取最新令牌，无需浏览器再登录。`;
       }
     } else {
       $("#cli-auth-status").textContent =
@@ -404,20 +406,27 @@
     if (r.error) return `同步失败：${r.error}\n路径：${r.path || ""}`;
     if (!r.exists) return `未找到 CLI 文件：\n${r.path || ""}`;
     let msg =
-      `已同步 CLI\n` +
+      `已从本地 CLI 同步最新登录状态\n` +
       `路径：${r.path}\n` +
       `CLI 账号 ${r.cliCount} · 新增 ${r.added} · 更新令牌 ${r.updated}` +
+      (r.restored ? ` · 恢复 ${r.restored}` : "") +
       (r.migrated ? ` · 迁移 ${r.migrated}` : "") +
       ` · 库内共 ${r.total}`;
+    if (r.updated > 0 && r.added === 0) {
+      msg += `\n已写入 grok login 后的最新 access / refresh token`;
+    }
     if (r.tombstoned > 0) {
-      msg += `\n跳过已删除 ${r.tombstoned} 个（同邮箱/用户不会自动加回）`;
+      msg += `\n跳过曾删除 ${r.tombstoned} 个（本次为强制同步时应已恢复；否则再点一次同步）`;
+    }
+    if (r.liftedTombs > 0) {
+      msg += `\n已解除 ${r.liftedTombs} 条删除记录并重新导入`;
     }
     if (r.prunedTombs > 0) {
-      msg += `\n已清理 ${r.prunedTombs} 条错误的「短 key」删除记录（此前会导致 CLI 账号无法再导入）`;
+      msg += `\n已清理 ${r.prunedTombs} 条错误的「短 key」删除记录`;
     }
     if (r.recovered || r.recoverNote) {
       msg += `\n\n注意：${r.recoverNote || r.message || "已从 CLI 重建无法解密的本地库"}`;
-    } else if (r.message && r.added === 0 && r.updated === 0) {
+    } else if (r.message && (r.restored > 0 || (r.added === 0 && r.updated === 0 && r.cliCount === 0))) {
       msg += `\n\n${r.message}`;
     }
     if (Array.isArray(r.emails) && r.emails.length) {
@@ -427,11 +436,12 @@
   }
 
   async function doSyncCli() {
-    const r = await openusage.softImportCli();
+    // force=true: pull ~/.grok/auth.json latest tokens; also re-add if previously deleted
+    const r = await openusage.softImportCli({ force: true });
     alert(formatSyncResult(r));
     await reloadAccounts();
     await reloadSettings();
-    if (r && (r.added > 0 || r.updated > 0 || r.total > 0)) setView("home");
+    if (r && (r.added > 0 || r.updated > 0 || r.restored > 0 || r.total > 0)) setView("home");
     return r;
   }
 
@@ -575,7 +585,14 @@
       await reloadAccounts();
       openEditModal(key);
     } else if (act === "delete") {
-      if (!confirm("从本应用删除该账号？\n（不会修改 Grok CLI 的 auth.json；若曾从 CLI 导入，删除后不会自动再同步回来）")) return;
+      if (
+        !confirm(
+          "从本应用删除该账号？\n" +
+            "（不会修改 Grok CLI 的 auth.json）\n" +
+            "删除后后台刷新不会自动加回；本地 grok login 后点「同步 Grok CLI」可重新导入最新令牌。"
+        )
+      )
+        return;
       await openusage.removeAccount(key);
       await reloadAccounts();
       // usage-result already pushed by main; re-render if needed

@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld("openusage", {
   logout: (entryKey) => invoke("logout", entryKey),
   logoutAll: () => invoke("logout-all"),
   refreshUsage: (opts) => invoke("refresh-usage", opts || {}),
-  softImportCli: () => invoke("soft-import-cli"),
+  softImportCli: (opts) => invoke("soft-import-cli", opts || {}),
   openPath: (which) => invoke("open-path", which),
   openExternal: (url) => invoke("open-external", url),
   hidePanel: () => invoke("hide-panel"),

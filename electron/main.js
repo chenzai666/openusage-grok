@@ -633,11 +633,15 @@ function registerIpc() {
 
   ipcMain.handle("refresh-usage", async (_e, opts) => refreshAll(opts || {}));
 
-  ipcMain.handle("soft-import-cli", async () => {
-    const result = secure.syncFromCli(true);
+  // soft-import-cli: pass { force: true } from UI button to re-add deleted identities.
+  // Default force=false so boot/background only refreshes tokens / adds new non-deleted.
+  ipcMain.handle("soft-import-cli", async (_e, opts) => {
+    const force = !!(opts && opts.force);
+    const result = secure.syncFromCli(true, { force });
     panel?.webContents.send("accounts-changed");
-    if (result.added > 0 || result.updated > 0 || result.total > 0) {
-      await refreshAll().catch(() => {});
+    if (result.added > 0 || result.updated > 0 || result.restored > 0 || result.total > 0) {
+      // Tokens already merged; skip another CLI pass inside refresh
+      await refreshAll({ skipCliSync: true }).catch(() => {});
     }
     return result;
   });
