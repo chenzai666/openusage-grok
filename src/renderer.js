@@ -415,6 +415,9 @@
     if (r.updated > 0 && r.added === 0) {
       msg += `\n已写入 grok login 后的最新 access / refresh token`;
     }
+    if (r.keptFresher > 0) {
+      msg += `\n保留 ${r.keptFresher} 个更新的浏览器授权令牌（未用较旧的 CLI token 覆盖）`;
+    }
     if (r.tombstoned > 0) {
       msg += `\n跳过曾删除 ${r.tombstoned} 个（本次为强制同步时应已恢复；否则再点一次同步）`;
     }
@@ -741,6 +744,18 @@
       $("#login-pending").hidden = true;
       state.loginInfo = null;
       state.reauthKey = null;
+      // Always surface which account actually authorized (same-as-CLI check)
+      try {
+        const who = st.email || st.entryKey || "";
+        if (st.identityMismatch) {
+          alert(st.message || "授权账号与当前卡片不一致，请核对浏览器里登录的 Google/xAI 账号");
+        } else if (who) {
+          // brief confirm so user can verify it matches CLI account
+          console.log("[device-login complete]", who, st.entryKey);
+        }
+      } catch {
+        /* ignore */
+      }
       reloadAccounts().then(() => setView("home"));
     } else if (st.state === "expired" || st.state === "cancelled" || st.state === "error") {
       if (st.state !== "cancelled") {

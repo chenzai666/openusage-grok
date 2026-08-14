@@ -372,7 +372,11 @@ function startLoginPoll() {
           settings.save({ activeEntryKey: st.entryKey });
         }
         panel?.webContents.send("accounts-changed");
-        await refreshAll({ skipCliSync: false });
+        // Use fresh device-login tokens first — do not immediately soft-merge CLI
+        // (CLI may be a *different* account and used to confuse "which login worked")
+        await refreshAll({ skipCliSync: true }).catch((e) => {
+          console.error("refresh after device-login", e);
+        });
       } else if (st.state === "expired" || st.state === "cancelled") {
         clearInterval(loginPollTimer);
         loginPollTimer = null;

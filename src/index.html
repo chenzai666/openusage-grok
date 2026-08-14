@@ -53,15 +53,17 @@
           <!-- Login -->
           <section id="view-login" class="view" hidden>
             <div class="card login-card">
-              <h2>浏览器登录</h2>
+              <h2>添加 / 重新登录账号</h2>
               <p class="muted">
-                使用 device-code 授权。链接已复制到剪贴板时请自行在浏览器打开（应用不会自动弹窗）。
+                <strong>应用内浏览器授权</strong>（device-code）：点「开始登录」→ 用复制的链接在浏览器完成 xAI 授权。
+                仅在 grok.com 网页登录<strong>不会</strong>自动进本应用。
               </p>
               <div id="login-idle">
-                <button type="button" class="btn primary" id="btn-start-login">开始登录</button>
-                <button type="button" class="btn ghost" id="btn-import-cli">同步 Grok CLI 账号</button>
+                <button type="button" class="btn primary" id="btn-start-login">开始登录（浏览器授权）</button>
+                <button type="button" class="btn ghost" id="btn-import-cli">同步本地 Grok CLI</button>
                 <p class="muted sm" id="cli-auth-hint" style="margin-top: 12px">
-                  本地已 <code>grok login</code> 时，点此读取 <code>~/.grok/auth.json</code> 最新令牌，无需再浏览器登录。
+                  本地已 <code>grok login</code> 时点「同步本地 Grok CLI」读取 <code>~/.grok/auth.json</code>。
+                  「同步失败」只表示 CLI 文件导入失败，与网页授权是两回事。
                 </p>
               </div>
               <div id="login-pending" hidden>
