@@ -966,6 +966,20 @@ html.light .unified-note {
   user-select: text;
 }
 
+.cliproxy-box {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.cliproxy-box h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.row.wrap {
+  flex-wrap: wrap;
+}
+
 .check {
   display: flex;
   align-items: center;

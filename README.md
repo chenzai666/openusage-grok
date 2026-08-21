@@ -7,6 +7,7 @@ Windows 托盘应用：仅监控 **Grok / SuperGrok** 多账号用量。
 ## 功能
 
 - Device-code 登录（复制链接，**不自动打开浏览器**）
+- 从 **Cliproxy / CLIProxyAPI** 导入 xAI 账号（扫描 `~/.cli-proxy-api`、选 JSON、或粘贴 `xai-*.json`）
 - 多账号卡片：周限 / Build / API / 按量
 - 托盘显示周限百分比数字
 - 应用内代理（自动 / 自定义 / 环境变量 / 系统 / 直连）

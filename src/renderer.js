@@ -561,8 +561,68 @@
     if (url) await openusage.copyText(url);
     $("#login-status").textContent = "链接已复制到剪贴板";
   });
+  function formatCliproxyResult(r) {
+    if (!r) return "导入失败：无返回";
+    if (r.cancelled) return "已取消";
+    if (r.error && !(r.added || r.updated)) return `导入失败：${r.error}`;
+    let msg =
+      `Cliproxy 导入完成\n` +
+      `解析到 ${r.scanned != null ? r.scanned : "?"} 个 xAI 账号` +
+      ` · 新增 ${r.added || 0} · 更新 ${r.updated || 0}` +
+      (r.restored ? ` · 恢复 ${r.restored}` : "") +
+      ` · 库内共 ${r.total != null ? r.total : "?"}`;
+    if (Array.isArray(r.emails) && r.emails.length) {
+      msg += `\n邮箱：${r.emails.join(", ")}`;
+    }
+    if (r.dir) msg += `\n目录：${r.dir}`;
+    if (Array.isArray(r.dirs) && r.dirs.length) msg += `\n目录：${r.dirs.join("\n")}`;
+    if (Array.isArray(r.files) && r.files.length) {
+      msg += `\n文件：${r.files.slice(0, 12).join(", ")}${r.files.length > 12 ? "…" : ""}`;
+    }
+    if (r.parseError) msg += `\n提示：${r.parseError}`;
+    if (r.error) msg += `\n${r.error}`;
+    return msg;
+  }
+
+  async function afterCliproxyImport(r) {
+    alert(formatCliproxyResult(r));
+    await reloadAccounts();
+    await reloadSettings();
+    if (r && (r.added > 0 || r.updated > 0 || r.restored > 0 || r.total > 0) && !r.error) {
+      setView("home");
+    }
+  }
+
   $("#btn-import-cli").addEventListener("click", () => doSyncCli());
   $("#btn-settings-import-cli").addEventListener("click", () => doSyncCli());
+  $("#btn-cliproxy-scan").addEventListener("click", async () => {
+    const r = await openusage.cliproxyScanDefault();
+    await afterCliproxyImport(r);
+  });
+  $("#btn-cliproxy-file").addEventListener("click", async () => {
+    const r = await openusage.cliproxyPickImport();
+    if (!r || r.cancelled) return;
+    await afterCliproxyImport(r);
+  });
+  $("#btn-cliproxy-folder").addEventListener("click", async () => {
+    const r = await openusage.cliproxyPickFolder();
+    if (!r || r.cancelled) return;
+    await afterCliproxyImport(r);
+  });
+  $("#btn-cliproxy-paste").addEventListener("click", async () => {
+    const text = ($("#cliproxy-paste") && $("#cliproxy-paste").value) || "";
+    const r = await openusage.cliproxyImportText(text);
+    await afterCliproxyImport(r);
+  });
+  $("#btn-settings-cliproxy-scan").addEventListener("click", async () => {
+    const r = await openusage.cliproxyScanDefault();
+    await afterCliproxyImport(r);
+  });
+  $("#btn-settings-cliproxy-file").addEventListener("click", async () => {
+    const r = await openusage.cliproxyPickImport();
+    if (!r || r.cancelled) return;
+    await afterCliproxyImport(r);
+  });
   $("#btn-settings-home").addEventListener("click", () => setView("home"));
 
   // Cards actions

@@ -65,6 +65,27 @@
                   本地已 <code>grok login</code> 时点「同步本地 Grok CLI」读取 <code>~/.grok/auth.json</code>。
                   「同步失败」只表示 CLI 文件导入失败，与网页授权是两回事。
                 </p>
+                <div class="cliproxy-box">
+                  <h3>从 Cliproxy 导入</h3>
+                  <p class="muted sm">
+                    解析 CLIProxyAPI 账号 JSON（<code>xai-邮箱.json</code>，含 access_token / refresh_token），导入后可查用量。
+                  </p>
+                  <div class="row gap wrap">
+                    <button type="button" class="btn sm" id="btn-cliproxy-scan">扫描默认目录</button>
+                    <button type="button" class="btn sm" id="btn-cliproxy-file">选择 JSON 文件</button>
+                    <button type="button" class="btn sm" id="btn-cliproxy-folder">选择 auth 目录</button>
+                  </div>
+                  <label class="field" style="margin-top: 10px">
+                    <span>或粘贴 JSON</span>
+                    <textarea
+                      id="cliproxy-paste"
+                      rows="5"
+                      spellcheck="false"
+                      placeholder='{"type":"xai","access_token":"eyJ...","refresh_token":"...","email":"you@x.ai"}'
+                    ></textarea>
+                  </label>
+                  <button type="button" class="btn sm primary" id="btn-cliproxy-paste">解析并导入</button>
+                </div>
               </div>
               <div id="login-pending" hidden>
                 <div class="code-box">
@@ -190,8 +211,10 @@
                 </div>
                 <p class="muted sm" id="encrypt-status">加密：检测中…</p>
                 <p class="muted sm" id="cli-auth-status">CLI：检测中…</p>
-                <div class="row gap" style="margin-bottom: 8px">
+                <div class="row gap wrap" style="margin-bottom: 8px">
                   <button type="button" class="btn sm" id="btn-settings-import-cli">同步 Grok CLI</button>
+                  <button type="button" class="btn sm" id="btn-settings-cliproxy-scan">扫描 Cliproxy</button>
+                  <button type="button" class="btn sm" id="btn-settings-cliproxy-file">导入 Cliproxy JSON</button>
                 </div>
                 <p class="muted sm">
                   同步会覆盖同账号的 access / refresh token（本地重新 login 后点此即可，不必浏览器再登）。

@@ -5,6 +5,7 @@ const {
   Menu,
   nativeImage,
   ipcMain,
+  dialog,
   shell,
   clipboard,
   nativeTheme,
@@ -20,6 +21,7 @@ const secure = require("../lib/secureAccounts");
 const grokAuth = require("../lib/grokAuth");
 const grokBilling = require("../lib/grokBilling");
 const grokApiTest = require("../lib/grokApiTest");
+const cliproxy = require("../lib/cliproxyImport");
 const { createTrayNativeImage } = require("../lib/trayIcon");
 const { appDataRoot, accountsPath, configPath, cliAuthPath, debugDir } = require("../lib/paths");
 
@@ -639,6 +641,107 @@ function registerIpc() {
 
   // soft-import-cli: pass { force: true } from UI button to re-add deleted identities.
   // Default force=false so boot/background only refreshes tokens / adds new non-deleted.
+  function importCliproxyEntries(entries, extra = {}) {
+    const result = secure.importCredentialEntries(entries, {
+      force: true,
+      source: "cliproxy-import",
+    });
+    Object.assign(result, extra);
+    panel?.webContents.send("accounts-changed");
+    if (result.added > 0 || result.updated > 0 || result.restored > 0) {
+      refreshAll({ skipCliSync: true }).catch(() => {});
+    }
+    return result;
+  }
+
+  ipcMain.handle("cliproxy-discover", async () => {
+    const cfg = settings.load();
+    const custom = (cfg.cliproxyAuthDir || "").trim();
+    return {
+      discovered: cliproxy.discoverDirs(),
+      custom: custom || null,
+      customExists: custom ? fs.existsSync(custom) : false,
+    };
+  });
+
+  ipcMain.handle("cliproxy-scan-default", async () => {
+    const cfg = settings.load();
+    const custom = (cfg.cliproxyAuthDir || "").trim();
+    if (custom) {
+      const r = cliproxy.scanDir(custom);
+      return importCliproxyEntries(r.entries, {
+        dir: r.dir,
+        files: r.files,
+        parseError: r.error,
+        scanned: r.entries.length,
+      });
+    }
+    const r = cliproxy.scanDefault();
+    return importCliproxyEntries(r.entries, {
+      dirs: r.dirs,
+      discovered: r.discovered,
+      files: r.files,
+      parseError: r.error,
+      scanned: r.entries.length,
+    });
+  });
+
+  ipcMain.handle("cliproxy-import-text", async (_e, text) => {
+    const parsed = cliproxy.parseText(text);
+    if (parsed.error) {
+      return { added: 0, updated: 0, skipped: 0, total: 0, error: parsed.error, scanned: 0 };
+    }
+    return importCliproxyEntries(parsed.entries, { scanned: parsed.entries.length });
+  });
+
+  ipcMain.handle("cliproxy-pick-import", async () => {
+    const res = await dialog.showOpenDialog(panel || undefined, {
+      title: "选择 Cliproxy 账号 JSON 或目录",
+      properties: ["openFile", "multiSelections"],
+      filters: [
+        { name: "JSON", extensions: ["json"] },
+        { name: "全部", extensions: ["*"] },
+      ],
+    });
+    if (res.canceled || !res.filePaths.length) return { cancelled: true };
+    const entries = [];
+    const files = [];
+    for (const fp of res.filePaths) {
+      const r = cliproxy.scanDir(fp);
+      if (r.entries.length) {
+        files.push(...(r.files.length ? r.files : [path.basename(fp)]));
+        entries.push(...r.entries);
+      }
+    }
+    if (!entries.length) {
+      return {
+        added: 0,
+        updated: 0,
+        scanned: 0,
+        error: "所选文件里没有 xAI/Grok 凭证",
+        files: res.filePaths.map((p) => path.basename(p)),
+      };
+    }
+    return importCliproxyEntries(entries, { files, scanned: entries.length });
+  });
+
+  ipcMain.handle("cliproxy-pick-folder", async () => {
+    const res = await dialog.showOpenDialog(panel || undefined, {
+      title: "选择 Cliproxy auth 目录（含 xai-*.json）",
+      properties: ["openDirectory"],
+    });
+    if (res.canceled || !res.filePaths.length) return { cancelled: true };
+    const dir = res.filePaths[0];
+    settings.save({ cliproxyAuthDir: dir });
+    const r = cliproxy.scanDir(dir);
+    return importCliproxyEntries(r.entries, {
+      dir: r.dir,
+      files: r.files,
+      parseError: r.error,
+      scanned: r.entries.length,
+    });
+  });
+
   ipcMain.handle("soft-import-cli", async (_e, opts) => {
     const force = !!(opts && opts.force);
     const result = secure.syncFromCli(true, { force });
