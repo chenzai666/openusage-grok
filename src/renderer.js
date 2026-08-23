@@ -339,7 +339,6 @@
 
   function formatProxyStatus(proxy) {
     if (!proxy) return "代理：未知";
-    const url = proxy.url || "—";
     const map = {
       direct: "直连",
       system: "系统代理",
@@ -352,7 +351,13 @@
       "env-empty": "环境变量（空→直连）",
     };
     const label = map[proxy.source] || proxy.source || proxy.mode;
-    return `当前生效：${label}${proxy.url ? " · " + proxy.url : ""}`;
+    let text = `当前生效：${label}${proxy.url ? " · " + proxy.url : ""}`;
+    if (proxy.skippedEnv) {
+      text += `（已跳过不可达的环境变量 ${proxy.skippedEnv}）`;
+    } else if (proxy.note) {
+      text += `（${proxy.note}）`;
+    }
+    return text;
   }
 
   async function reloadProxyStatus() {
