@@ -143,6 +143,18 @@
     return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
+  function quotaPercent(usedPercent) {
+    if (!Number.isFinite(usedPercent)) return null;
+    const used = Math.max(0, Math.min(100, usedPercent));
+    return state.settings?.quotaDisplay === "remaining" ? 100 - used : used;
+  }
+
+  function quotaText(usedPercent) {
+    const percent = quotaPercent(usedPercent);
+    const label = state.settings?.quotaDisplay === "remaining" ? "剩余" : "已用";
+    return percent == null ? "暂无额度数据" : `${label} ${Math.round(percent)}%`;
+  }
+
   function healthDotsHtml(percent) {
     const total = 18;
     const pct =
@@ -156,8 +168,8 @@
     for (let i = 0; i < total; i++) {
       dots += `<span class="${i < filled ? "on" : ""}"></span>`;
     }
-    const label = pct == null ? "—" : Math.round(pct) + "%";
-    return `<div class="health">
+    const label = pct == null ? "—" : quotaText(pct);
+    return `<div class="health" title="健康点阵表示周限剩余额度">
       <span class="health-label">健康状态（周限）</span>
       <div class="health-dots">${dots}</div>
       <span class="health-pct">${esc(label)}</span>
@@ -241,8 +253,8 @@
       .map((t) => `<span class="badge tag">${esc(t)}</span>`)
       .join("");
     const weeklyVal =
-      acc.weeklyPercent != null
-        ? `已用 ${Math.round(acc.weeklyPercent)}%` +
+      Number.isFinite(acc.weeklyPercent)
+        ? quotaText(acc.weeklyPercent) +
           (acc.weeklyReset ? ` · 重置 ${acc.weeklyReset}` : "")
         : "无周额度数据";
     const buildVal =
@@ -301,7 +313,7 @@
       </div>
       <div class="card-metrics">
         ${healthDotsHtml(acc.weeklyPercent)}
-        ${metric("周限额", weeklyVal, acc.weeklyPercent, acc.weeklyPercent == null)}
+        ${metric("周限额", weeklyVal, quotaPercent(acc.weeklyPercent), !Number.isFinite(acc.weeklyPercent))}
         ${metric("Build 用量", buildVal, acc.buildPercent, acc.buildPercent == null)}
         ${metric("API 月额度", apiVal, acc.apiPercent, acc.apiPercent == null)}
         ${metric("按量已用", onDemand, null, true)}
@@ -332,7 +344,7 @@
   function renderChatgptCard(acc) {
     const plan = String(acc.planName || "ChatGPT / Codex").replace(/\b(team|plus|pro|business|enterprise|free|edu)\b/gi, (s) => s[0].toUpperCase() + s.slice(1).toLowerCase());
     const email = acc.emailDisplay || acc.title || acc.emailMasked || "ChatGPT 账号";
-    const metrics = (acc.metrics || []).map((m) => metric(m.label, `已用 ${Math.round(m.percent)}%` + (m.resetAt ? " · 重置 " + formatTime(m.resetAt) : ""), m.percent, false)).join("");
+    const metrics = (acc.metrics || []).map((m) => metric(m.label, quotaText(m.percent) + (m.resetAt ? " · 重置 " + formatTime(m.resetAt) : ""), quotaPercent(m.percent), !Number.isFinite(m.percent))).join("");
     return `<article class="acc-card" data-key="${esc(acc.entryKey)}" draggable="true">
       <div class="card-body"><div class="card-head">
         <span class="drag-handle" data-drag-handle draggable="true" title="拖动调整账号顺序" aria-label="拖动调整账号顺序">⠿</span>
@@ -545,6 +557,7 @@
     $("#set-refresh").value = String(state.settings.refreshMinutes || 5);
     $("#set-login-item").checked = !!state.settings.launchAtLogin;
     $("#set-tray-pct").checked = state.settings.trayShowPercent !== false;
+    $("#set-quota-display").value = state.settings.quotaDisplay === "remaining" ? "remaining" : "used";
     $("#set-full-emails").checked = state.settings.showFullEmails === true;
     $("#set-proxy-mode").value = state.settings.proxyMode || "auto";
     $("#set-proxy-url").value = state.settings.proxyUrl || "";
@@ -924,6 +937,24 @@
   });
 
   // Settings fields
+  $("#set-quota-display").addEventListener("change", async (e) => {
+    const control = e.target;
+    const previous = state.settings?.quotaDisplay || "used";
+    const value = control.value === "remaining" ? "remaining" : "used";
+    state.settings = { ...state.settings, quotaDisplay: value };
+    renderCards();
+    control.disabled = true;
+    try {
+      await openusage.updateSettings({ quotaDisplay: value });
+    } catch (error) {
+      state.settings = { ...state.settings, quotaDisplay: previous };
+      control.value = previous;
+      renderCards();
+      $("#operation-message").textContent = error.message || String(error);
+      $("#operation-message").hidden = false;
+    } finally { control.disabled = false; }
+  });
+
   $("#set-theme").addEventListener("change", async (e) => {
     await openusage.updateSettings({ theme: e.target.value });
     const st = await openusage.getStatus();

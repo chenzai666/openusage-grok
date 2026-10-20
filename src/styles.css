@@ -774,7 +774,8 @@ html.light .unified-note {
   height: 7px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.12);
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 3px;
 }
 .health-dots span.on {
   background: #22c55e;
@@ -786,6 +787,8 @@ html.light .unified-note {
   color: rgba(255, 255, 255, 0.5);
   min-width: 2rem;
   text-align: right;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .footer-meta {

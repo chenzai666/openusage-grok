@@ -180,6 +180,65 @@ test("switching selected provider uses its own cached tray result", async () => 
   assert.match(f.tips.at(-1),/Grok/);
 });
 
+test("quota display switches the current provider's cached tray immediately without fetching", async () => {
+  const f=fixture();let grokRefreshes=0;
+  f.billing.fetchAllUsage=async()=>{grokRefreshes++;return {accounts:[],trayPercent:11};};
+  const raw=await f.invoke("refresh-usage");assert.equal(raw.trayPercent,11);
+  await f.invoke("update-settings",{quotaDisplay:"remaining"});
+  assert.equal(f.images.at(-1).percent,89);assert.match(f.tips.at(-1),/Grok · 周限剩余 89%/);
+  await f.invoke("update-settings",{selectedProvider:"chatgpt"});
+  assert.equal(f.images.at(-1).percent,34);assert.match(f.tips.at(-1),/ChatGPT · 周限剩余 34%/);
+  await f.invoke("update-settings",{quotaDisplay:"used"});
+  assert.equal(f.images.at(-1).percent,66);assert.match(f.tips.at(-1),/ChatGPT · 周限已用 66%/);
+  await f.invoke("update-settings",{selectedProvider:"grok"});
+  assert.equal(f.images.at(-1).percent,11);assert.match(f.tips.at(-1),/Grok · 周限已用 11%/);
+  assert.equal(grokRefreshes,1);assert.equal(f.calls.refresh,0);
+  assert.equal((await f.invoke("get-status")).lastUsage.trayPercent,11);
+  assert.equal((await f.invoke("get-status")).chatgptLastUsage.trayPercent,66);
+});
+
+test("remaining tray handles endpoints and clamping without changing raw usage", async () => {
+  for(const provider of ["grok","chatgpt"]) {
+    for(const [used,expected] of [[0,100],[100,0],[-5,100],[105,0],[25.4,75]]) {
+      const f=fixture({selectedProvider:provider,quotaDisplay:"remaining"});
+      const raw={provider,accounts:[],trayPercent:used};
+      f.billing.fetchAllUsage=async()=>raw;f.service.refresh=async()=>raw;
+      const result=await f.invoke(provider==="chatgpt"?"chatgpt-refresh":"refresh-usage");
+      assert.equal(result.trayPercent,used);
+      assert.equal(f.images.at(-1).percent,expected);
+      assert.match(f.tips.at(-1),new RegExp(`周限剩余 ${expected}%`));
+    }
+  }
+});
+
+test("missing quota and logout never become 100 percent remaining", async () => {
+  for(const provider of ["grok","chatgpt"]) {
+    for(const percent of [null,undefined,NaN,Infinity,"0"]) {
+      const f=fixture({selectedProvider:provider,quotaDisplay:"remaining"});
+      const raw={accounts:[],trayPercent:percent};
+      f.billing.fetchAllUsage=async()=>raw;f.service.refresh=async()=>raw;
+      await f.invoke(provider==="chatgpt"?"chatgpt-refresh":"refresh-usage");
+      assert.equal(f.images.at(-1).percent,0);assert.doesNotMatch(f.tips.at(-1),/周限|100%/);
+    }
+  }
+  const f=fixture({quotaDisplay:"remaining"});await f.invoke("logout-all");
+  assert.equal(f.images.at(-1).percent,0);assert.doesNotMatch(f.tips.at(-1),/周限|100%/);
+  f.service.getLastUsage=()=>null;
+  await f.invoke("update-settings",{selectedProvider:"chatgpt"});
+  assert.equal(f.images.at(-1).percent,0);assert.doesNotMatch(f.tips.at(-1),/周限|100%/);
+  await f.invoke("update-settings",{trayShowPercent:false});
+  assert.doesNotMatch(f.tips.at(-1),/周限/);
+});
+
+test("quota display rejects unsupported values before saving any settings", async () => {
+  const f=fixture({quotaDisplay:"used"});
+  for(const value of [null,undefined,"left","Remaining",true,0,{},[]]) {
+    await assert.rejects(f.invoke("update-settings",{quotaDisplay:value,selectedProvider:"chatgpt"}),/额度显示方式/);
+    assert.equal(f.cfg.quotaDisplay,"used");assert.equal(f.cfg.selectedProvider,"grok");
+  }
+  assert.equal(f.images.length,0);assert.equal(f.calls.refresh,0);
+});
+
 test("background Grok account actions never replace the ChatGPT tray", async () => {
   for(const [name,args] of [["set-active-account",["grok:b"]],["remove-account",["grok:a"]],["logout-all",[]]]) {
     const f=fixture();await f.invoke("refresh-usage");f.cfg.selectedProvider="chatgpt";

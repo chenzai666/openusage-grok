@@ -294,12 +294,14 @@ function updateTrayIcon(percent) {
   if (!tray) return;
   const cfg = settings.load();
   const show = cfg.trayShowPercent !== false;
-  const p = show && percent != null && Number.isFinite(percent) ? Math.round(percent) : null;
+  const remaining = cfg.quotaDisplay === "remaining";
+  const used = percent != null && Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null;
+  const p = show && used != null ? Math.round(remaining ? 100 - used : used) : null;
   try {
     const img = createTrayNativeImage(nativeImage, p != null ? p : 0, { size: 32 });
     tray.setImage(img);
     tray.setToolTip(
-      p != null ? `OpenUsage ${settings.load().selectedProvider === "chatgpt" ? "ChatGPT" : "Grok"} · 周限已用 ${p}%` : "OpenUsage Grok + ChatGPT"
+      p != null ? `OpenUsage ${cfg.selectedProvider === "chatgpt" ? "ChatGPT" : "Grok"} · 周限${remaining ? "剩余" : "已用"} ${p}%` : "OpenUsage Grok + ChatGPT"
     );
   } catch (e) {
     console.error("tray icon", e);
@@ -551,6 +553,9 @@ function registerIpc() {
 
   ipcMain.handle("get-settings", async () => settings.load());
   ipcMain.handle("update-settings", async (_e, partial) => {
+    if (partial && "quotaDisplay" in partial && !["used", "remaining"].includes(partial.quotaDisplay)) {
+      throw new Error("额度显示方式必须是 used 或 remaining");
+    }
     for (const field of ["chatgptAccountOrder", "accountOrder"]) {
       if (partial && field in partial && !Array.isArray(partial[field])) throw new Error("账号排序必须是有效编号数组");
     }
@@ -568,7 +573,7 @@ function registerIpc() {
         /* ignore */
       }
     }
-    if (partial && ("trayShowPercent" in partial || "selectedProvider" in partial)) {
+    if (partial && ("trayShowPercent" in partial || "selectedProvider" in partial || "quotaDisplay" in partial)) {
       const usage = next.selectedProvider === "chatgpt" ? chatgpt.getLastUsage() : lastUsage;
       updateTrayIcon(usage?.trayPercent ?? null);
     }
@@ -772,7 +777,7 @@ function registerIpc() {
     secure.clearAll();
     settings.save({ activeEntryKey: null, accountOrder: [] });
     lastUsage = { v: 1, provider: "grok", accounts: [], trayPercent: null };
-    if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(0);
+    if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(null);
     panel?.webContents.send("accounts-changed");
     panel?.webContents.send("usage-result", lastUsage);
     return true;

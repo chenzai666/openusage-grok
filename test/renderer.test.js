@@ -10,19 +10,19 @@ async function until(check) {
   assert.ok(check(),"等待界面更新超时");
 }
 
-async function fixture(t) {
+async function fixture(t, settings = {}, overrides = {}) {
   const root=path.join(__dirname,"..");
   const dom=new JSDOM(fs.readFileSync(path.join(root,"src/index.html"),"utf8"),{runScripts:"outside-only",url:"file:///preview/index.html"});
   // Event handlers continue through several already-resolved IPC promises.
   // Drain their microtasks before destroying the document they still render into.
   t.after(async()=>{await new Promise(setImmediate);dom.window.close();});
   const win=dom.window,doc=win.document,events={},calls=[];
-  const config={theme:"dark",refreshMinutes:5,proxyMode:"auto",selectedProvider:"grok",showFullEmails:false};
+  const config={theme:"dark",refreshMinutes:5,proxyMode:"auto",selectedProvider:"grok",showFullEmails:false,...settings};
   const grok={v:1,provider:"grok",refreshedAt:new Date().toISOString(),accounts:[{entryKey:"grok-1",title:"原有 Grok 账号",emailMasked:"gr***@example.com",status:"正常",labels:[],weeklyPercent:7,planName:"SuperGrok",enabled:true}]};
   const chat={v:1,provider:"chatgpt",refreshedAt:new Date().toISOString(),accounts:[{provider:"chatgpt",entryKey:"chatgpt:local",title:"本机 Codex",emailMasked:"te***@example.com",source:"本机 Codex（只读）",status:"正常",planName:"Plus",weeklyPercent:24,resetCount:1,metrics:[{label:"5h限额",percent:16},{label:"周限额",percent:24}],enabled:true}]};
   const base={
     getSettings:async()=>({...config}),getStatus:async()=>({version:"0.1.19",encrypted:true,dark:true,cliAuth:{exists:false},lastUsage:grok,chatgptLastUsage:chat}),
-    updateSettings:async(p)=>Object.assign(config,p),getProxyStatus:async()=>({source:"system",mode:"system"}),
+    updateSettings:async(p)=>{calls.push(["settings",{...p}]);return Object.assign(config,p);},getProxyStatus:async()=>({source:"system",mode:"system"}),
     listAccounts:async()=>grok.accounts,chatgptList:async()=>chat.accounts,
     refreshUsage:async()=>{events.onUsageResult?.(grok);return grok;},
     chatgptRefresh:async()=>{events.onUsageResult?.(chat);return chat;},
@@ -39,6 +39,7 @@ async function fixture(t) {
   };
   for(const name of ["onUsageResult","onLoginState","onThemeChanged","onAccountsChanged","onFullscreenChanged","onPanelShown","onNavigate"])base[name]=(fn)=>{events[name]=fn;};
   for(const name of ["testAccountApi","testAllApis","removeAccount","setAccountLabels","setAccountSubscription","reorderAccounts","startBrowserLogin","cancelLogin","copyText","openExternal","openPath","hidePanel","setFullscreen","toggleFullscreen","applyProxy","testProxy"])base[name]||=(async()=>({}));
+  Object.assign(base,overrides);
   win.openusage=base;win.alert=(message)=>calls.push(["alert",message]);win.confirm=()=>true;
   win.eval(fs.readFileSync(path.join(root,"src/renderer.js"),"utf8"));
   await until(()=>doc.querySelector(".card-title")?.textContent==="原有 Grok 账号");
@@ -201,6 +202,119 @@ test("full email preference updates card and settings list, and masks cached car
   await until(()=>!control.disabled);
   assert.equal(f.doc.querySelector(".card-title").textContent,"te***@example.com");
   assert.equal(f.doc.querySelector(".acc-row .name").textContent,"te***@example.com");
+});
+
+function quotaMetric(f, label) {
+  const metric=[...f.doc.querySelectorAll("#cards .metric")].find(n=>n.querySelector(".metric-label")?.textContent===label);
+  assert.ok(metric,`缺少额度指标：${label}`);
+  return {text:metric.querySelector(".metric-value").textContent,bar:metric.querySelector(".thin-bar i")?.style.width};
+}
+
+function setQuotaDisplay(f, value) {
+  const control=f.doc.getElementById("set-quota-display");
+  assert.ok(control,"设置应提供额度已用/剩余显示选项");
+  control.value=value;
+  control.dispatchEvent(new f.win.Event("change",{bubbles:true}));
+  return control;
+}
+
+test("quota display defaults to used and includes an explicit weekly health label",async(t)=>{
+  const f=await fixture(t);f.click("provider-chatgpt");await until(()=>f.doc.querySelector(".avatar.chatgpt"));
+  assert.equal(f.doc.getElementById("set-quota-display").value,"used");
+  assert.deepEqual(quotaMetric(f,"5h限额"),{text:"已用 16%",bar:"16%"});
+  assert.deepEqual(quotaMetric(f,"周限额"),{text:"已用 24%",bar:"24%"});
+  assert.equal(f.doc.querySelector(".health-pct").textContent,"已用 24%");
+});
+
+test("quota preference immediately inverts ChatGPT metrics and restores used without a request",async(t)=>{
+  const f=await fixture(t);f.click("provider-chatgpt");await until(()=>f.doc.querySelector(".avatar.chatgpt"));
+  f.chat.accounts[0].metrics.push({label:"代码审查限额",percent:30,resetAt:"2026-10-27T08:39:00Z"});
+  f.chat.accounts[0].metrics[0].resetAt="2026-10-20T13:39:00Z";
+  f.events.onUsageResult(f.chat);
+  const original=JSON.stringify(f.chat),status=f.doc.querySelector(".status-ok").textContent;
+  const healthDots=f.doc.querySelector(".health-dots").innerHTML;
+  const before5h=quotaMetric(f,"5h限额").text,beforeReview=quotaMetric(f,"代码审查限额").text;
+  let requests=0;
+  f.base.refreshUsage=async()=>{requests++;return f.grok;};
+  f.base.chatgptRefresh=async()=>{requests++;return f.chat;};
+  setQuotaDisplay(f,"remaining");
+  await until(()=>quotaMetric(f,"5h限额").text.startsWith("剩余 84%"));
+  assert.equal(f.config.quotaDisplay,"remaining");
+  assert.ok(f.calls.some(c=>c[0]==="settings"&&c[1].quotaDisplay==="remaining"));
+  assert.equal(quotaMetric(f,"5h限额").text.replace("剩余 84%",""),before5h.replace("已用 16%",""));
+  assert.deepEqual(quotaMetric(f,"周限额"),{text:"剩余 76%",bar:"76%"});
+  assert.equal(quotaMetric(f,"代码审查限额").bar,"70%");
+  assert.equal(quotaMetric(f,"代码审查限额").text.replace("剩余 70%",""),beforeReview.replace("已用 30%",""));
+  assert.equal(f.doc.querySelector(".health-pct").textContent,"剩余 76%");
+  assert.equal(f.doc.querySelector(".health-dots").innerHTML,healthDots);
+  assert.equal(JSON.stringify(f.chat),original);
+  assert.equal(f.doc.querySelector(".status-ok").textContent,status);
+  setQuotaDisplay(f,"used");
+  await until(()=>quotaMetric(f,"5h限额").text===before5h);
+  assert.equal(quotaMetric(f,"5h限额").bar,"16%");
+  assert.equal(quotaMetric(f,"周限额").text,"已用 24%");
+  assert.equal(f.config.quotaDisplay,"used");
+  assert.equal(requests,0);
+});
+
+test("remaining quota clamps boundaries and keeps missing or invalid usage unknown",async(t)=>{
+  const f=await fixture(t);f.click("provider-chatgpt");await until(()=>f.doc.querySelector(".avatar.chatgpt"));
+  f.chat.accounts[0].metrics=[
+    {label:"零用量",percent:0},{label:"耗尽",percent:100},
+    {label:"负用量",percent:-7},{label:"超限用量",percent:127},
+    {label:"空值",percent:null},{label:"缺失"},{label:"非法数值",percent:NaN},
+    {label:"无穷数值",percent:Infinity},{label:"空字符串",percent:""},
+  ];
+  f.chat.accounts[0].weeklyPercent=null;
+  f.events.onUsageResult(f.chat);setQuotaDisplay(f,"remaining");
+  await until(()=>quotaMetric(f,"零用量").text==="剩余 100%");
+  for(const label of ["零用量","负用量"])assert.deepEqual(quotaMetric(f,label),{text:"剩余 100%",bar:"100%"});
+  for(const label of ["耗尽","超限用量"])assert.deepEqual(quotaMetric(f,label),{text:"剩余 0%",bar:"0%"});
+  for(const label of ["空值","缺失","非法数值","无穷数值","空字符串"]){
+    const metric=quotaMetric(f,label);
+    assert.doesNotMatch(metric.text,/\d+%|NaN|Infinity/);
+    assert.equal(metric.bar,undefined);
+  }
+  assert.doesNotMatch(f.doc.querySelector(".health").textContent,/100%|NaN|Infinity/);
+});
+
+test("Grok weekly quota shares remaining preference while Build and API usage retain used values",async(t)=>{
+  const f=await fixture(t);
+  Object.assign(f.grok.accounts[0],{buildPercent:11,apiPercent:20,apiUsed:20,apiLimit:100,onDemandText:"已用 US$3.00"});
+  f.events.onUsageResult(f.grok);
+  const build=quotaMetric(f,"Build 用量"),api=quotaMetric(f,"API 月额度"),onDemand=quotaMetric(f,"按量已用");
+  setQuotaDisplay(f,"remaining");
+  await until(()=>quotaMetric(f,"周限额").text.startsWith("剩余 93%"));
+  assert.equal(quotaMetric(f,"周限额").bar,"93%");
+  assert.match(f.doc.querySelector(".health").textContent,/剩余/);
+  assert.match(f.doc.querySelector(".health").textContent,/93%/);
+  assert.deepEqual(quotaMetric(f,"Build 用量"),build);
+  assert.deepEqual(quotaMetric(f,"API 月额度"),api);
+  assert.deepEqual(quotaMetric(f,"按量已用"),onDemand);
+  assert.match(build.text,/已用 11%/);assert.match(api.text,/已用 20%/);
+  f.click("provider-chatgpt");await until(()=>f.doc.querySelector(".avatar.chatgpt"));
+  assert.equal(quotaMetric(f,"5h限额").text,"剩余 84%");
+  f.click("provider-grok");await until(()=>f.doc.querySelector(".grok-mark"));
+  assert.match(quotaMetric(f,"周限额").text,/剩余 93%/);
+});
+
+test("saved remaining quota preference is restored at startup",async(t)=>{
+  const f=await fixture(t,{quotaDisplay:"remaining"});
+  assert.equal(f.doc.getElementById("set-quota-display").value,"remaining");
+  assert.match(quotaMetric(f,"周限额").text,/剩余 93%/);
+  f.click("provider-chatgpt");await until(()=>f.doc.querySelector(".avatar.chatgpt"));
+  assert.deepEqual(quotaMetric(f,"5h限额"),{text:"剩余 84%",bar:"84%"});
+});
+
+test("failed quota preference save restores the previous display and reports the error",async(t)=>{
+  const f=await fixture(t,{}, {updateSettings:async()=>{throw new Error("模拟设置保存失败");}});
+  const control=setQuotaDisplay(f,"remaining");
+  assert.match(quotaMetric(f,"周限额").text,/剩余 93%/);
+  await until(()=>!f.doc.getElementById("operation-message").hidden);
+  assert.match(f.doc.getElementById("operation-message").textContent,/模拟设置保存失败/);
+  assert.equal(control.value,"used");
+  assert.deepEqual(quotaMetric(f,"周限额"),{text:"已用 7%",bar:"7%"});
+  assert.equal(f.doc.querySelector(".health-pct").textContent,"已用 7%");
 });
 
 test("ChatGPT scan/file/paste controls route to Codex imports",async(t)=>{
