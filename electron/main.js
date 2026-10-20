@@ -45,16 +45,65 @@ let loginPollTimer = null;
 let lastUsage = null;
 let compactBounds = null;
 let dialogDepth = 0;
+let userResizePending = false;
+let lastLayoutSignature = "";
+
+function logPanelLayout(cfg, size) {
+  const mode = cfg.panelWidthMode === "manual" ? "manual" : "auto";
+  const signature = `${mode}:${size.width}:${size.height}`;
+  if (signature === lastLayoutSignature) return;
+  lastLayoutSignature = signature;
+  console.log("[panel-layout]", { mode, provider: cfg.selectedProvider === "chatgpt" ? "chatgpt" : "grok", ...size });
+}
 
 async function withDialog(action) {
   dialogDepth++;
   try { return await action(); } finally { dialogDepth--; }
 }
 
-function panelSize(cfg = settings.load()) {
-  const width = Number.isFinite(cfg.panelWidth) && cfg.panelWidth > 0 ? cfg.panelWidth : 860;
+function panelDisplay(useCurrent = false) {
+  if (useCurrent && panel && !panel.isDestroyed()) {
+    const bounds = panel.getBounds();
+    if (bounds.x > -30000 && bounds.y > -30000) return screen.getDisplayMatching(bounds);
+  }
+  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+}
+
+function panelSize(cfg = settings.load(), display = panelDisplay()) {
+  let width = Number.isFinite(cfg.panelWidth) && cfg.panelWidth > 0 ? cfg.panelWidth : 400;
+  if (cfg.panelWidthMode !== "manual") {
+    // Count only trusted vault entries, never a renderer-supplied account count.
+    const accounts = cfg.selectedProvider === "chatgpt" ? chatgpt.list() : secure.listEntries();
+    width = accounts.length > 1 ? 720 : 400;
+  }
   const height = Number.isFinite(cfg.panelHeight) && cfg.panelHeight > 0 ? cfg.panelHeight : 680;
-  return { width: Math.max(360, Math.min(1400, width)), height: Math.max(480, Math.min(1200, height)) };
+  const wa = display.workArea;
+  return {
+    width: Math.min(Math.max(360, Math.min(1400, width)), Math.max(360, wa.width - 16)),
+    height: Math.min(Math.max(480, Math.min(1200, height)), Math.max(420, wa.height - 16)),
+  };
+}
+
+function syncPanelSize() {
+  if (!panel || panel.isDestroyed() || isFullscreen) return;
+  try {
+    const display = panelDisplay(true);
+    const cfg = settings.load();
+    const size = panelSize(cfg, display);
+    const bounds = panel.getBounds();
+    if (bounds.width !== size.width || bounds.height !== size.height) {
+      panel.setBounds({ ...bounds, ...size }, false);
+      positionNearTaskbar(display);
+    }
+    logPanelLayout(cfg, size);
+  } catch (e) {
+    console.error("panel size", e.message);
+  }
+}
+
+function notifyAccountsChanged() {
+  syncPanelSize();
+  panel?.webContents.send("accounts-changed");
 }
 
 function accountOrder(provider, requested) {
@@ -94,6 +143,7 @@ async function refreshChatgpt() {
   const refreshed = await chatgpt.refresh();
   if (!refreshed) return refreshChatgpt();
   const result = orderedUsage("chatgpt", refreshed);
+  syncPanelSize();
   if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(result.trayPercent);
   if (panel && !panel.isDestroyed()) panel.webContents.send("usage-result", result);
   return result;
@@ -130,7 +180,14 @@ function applyTheme() {
 
 function createPanel() {
   const cfg = settings.load();
-  const { width: w, height: h } = panelSize(cfg);
+  let size;
+  try { size = panelSize(cfg); }
+  catch (e) {
+    console.error("initial panel size", e.message);
+    size = panelSize({ ...cfg, panelWidthMode: "manual" });
+  }
+  const { width: w, height: h } = size;
+  logPanelLayout(cfg, size);
 
   panel = new BrowserWindow({
     width: w,
@@ -173,12 +230,20 @@ function createPanel() {
     }, 180);
   });
 
+  // Electron emits will-resize only for interactive resizing, not setBounds/setSize.
+  panel.on("will-resize", () => {
+    if (!isFullscreen) userResizePending = true;
+  });
   panel.on("resized", () => {
     if (isFullscreen || !panel || panel.isDestroyed()) return;
+    if (!userResizePending) return;
+    userResizePending = false;
     const b = panel.getBounds();
-    settings.save({ panelWidth: b.width, panelHeight: b.height });
+    settings.save({ panelWidth: b.width, panelHeight: b.height, panelWidthMode: "manual" });
+    logPanelLayout(settings.load(), { width: b.width, height: b.height });
+    panel.webContents.send("panel-width-mode-changed", "manual");
     // Keep bottom-right glued to taskbar after user resize
-    positionNearTaskbar();
+    positionNearTaskbar(panelDisplay(true));
   });
 
   panel.on("moved", () => {
@@ -202,13 +267,12 @@ function createPanel() {
  * Uses the display under the cursor (tray clicks), not always primary —
  * avoids multi-monitor "window flies to the wrong screen".
  */
-function positionNearTaskbar() {
+function positionNearTaskbar(preferredDisplay) {
   if (!panel || panel.isDestroyed() || isFullscreen) return;
 
-  let display;
+  let display = preferredDisplay;
   try {
-    const pt = screen.getCursorScreenPoint();
-    display = screen.getDisplayNearestPoint(pt);
+    if (!display) display = panelDisplay();
   } catch {
     display = screen.getPrimaryDisplay();
   }
@@ -243,6 +307,7 @@ function positionNearTray() {
 function showPanel() {
   if (!panel || panel.isDestroyed()) createPanel();
   if (!isFullscreen) {
+    syncPanelSize();
     // Position while still hidden when possible to avoid jump/flash
     positionNearTaskbar();
   }
@@ -263,6 +328,8 @@ function hidePanel() {
 
 function setFullscreenMode(on) {
   if (!panel || panel.isDestroyed()) return;
+  if (isFullscreen === !!on) return;
+  userResizePending = false;
   isFullscreen = !!on;
   if (isFullscreen) {
     compactBounds = panel.getBounds();
@@ -281,10 +348,19 @@ function setFullscreenMode(on) {
   } else {
     panel.setAlwaysOnTop(true);
     panel.setSkipTaskbar(true);
-    const { width: w, height: h } = panelSize();
+    const display = panelDisplay(true);
+    const cfg = settings.load();
+    let size;
+    try { size = panelSize(cfg, display); }
+    catch (e) {
+      console.error("restore panel size", e.message);
+      size = panelSize({ ...cfg, panelWidthMode: "manual", panelWidth: compactBounds?.width || cfg.panelWidth }, display);
+    }
+    const { width: w, height: h } = size;
     panel.setSize(w, h);
     // Always re-snap to taskbar — do not restore old bounds (causes "flying")
-    positionNearTaskbar();
+    positionNearTaskbar(display);
+    logPanelLayout(cfg, size);
     panel.show();
   }
   panel.webContents.send("fullscreen-changed", isFullscreen);
@@ -387,6 +463,7 @@ async function refreshAll(opts = {}) {
     const result = orderedUsage("grok", await grokBilling.fetchAllUsage({ runChat: !!opts.runChat }));
     result.provider = "grok";
     lastUsage = result;
+    syncPanelSize();
     if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(result.trayPercent);
     if (panel && !panel.isDestroyed()) {
       panel.webContents.send("usage-result", result);
@@ -432,7 +509,7 @@ function startLoginPoll() {
         if (st.entryKey) {
           settings.save({ activeEntryKey: st.entryKey });
         }
-        panel?.webContents.send("accounts-changed");
+        notifyAccountsChanged();
         // Use fresh device-login tokens first — do not immediately soft-merge CLI
         // (CLI may be a *different* account and used to confuse "which login worked")
         await refreshAll({ skipCliSync: true }).catch((e) => {
@@ -461,13 +538,13 @@ function registerIpc() {
     accountOrder("chatgpt", keys);
     const result = orderedUsage("chatgpt", chatgpt.getLastUsage());
     if (result) panel?.webContents.send("usage-result", result);
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     return true;
   });
   ipcMain.handle("chatgpt-remove", async (_e, key) => {
     if (typeof key !== "string") throw new Error("账号编号无效");
     chatgpt.remove(key);
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     return refreshChatgpt();
   });
   ipcMain.handle("chatgpt-active", async (_e, key) => {
@@ -477,12 +554,12 @@ function registerIpc() {
       if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(result.trayPercent);
       panel?.webContents.send("usage-result", result);
     }
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     return true;
   });
   ipcMain.handle("chatgpt-clear", async () => {
     chatgpt.clearAll();
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     return refreshChatgpt();
   });
   ipcMain.handle("chatgpt-import", async (_e, mode, value) => {
@@ -502,7 +579,7 @@ function registerIpc() {
       if (picked.canceled || !picked.filePaths.length) return { cancelled: true };
       result = chatgpt.importPaths(picked.filePaths);
     } else throw new Error("不支持的导入方式");
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     refreshChatgpt().catch((e) => console.error("ChatGPT refresh:", e.message));
     return result;
   });
@@ -556,12 +633,22 @@ function registerIpc() {
     if (partial && "quotaDisplay" in partial && !["used", "remaining"].includes(partial.quotaDisplay)) {
       throw new Error("额度显示方式必须是 used 或 remaining");
     }
+    if (partial && "panelWidthMode" in partial && !["auto", "manual"].includes(partial.panelWidthMode)) {
+      throw new Error("窗口宽度模式必须是 auto 或 manual");
+    }
     for (const field of ["chatgptAccountOrder", "accountOrder"]) {
       if (partial && field in partial && !Array.isArray(partial[field])) throw new Error("账号排序必须是有效编号数组");
     }
     if (partial && "chatgptAccountOrder" in partial) partial = { ...partial, chatgptAccountOrder: accountOrder("chatgpt", partial.chatgptAccountOrder) };
     if (partial && "accountOrder" in partial) partial = { ...partial, accountOrder: accountOrder("grok", partial.accountOrder) };
+    if (partial?.panelWidthMode === "manual" && !("panelWidth" in partial) && panel && !panel.isDestroyed()) {
+      // Freezing the automatic layout keeps its visible width, not a stale saved default.
+      const bounds = isFullscreen ? compactBounds : panel.getBounds();
+      if (bounds) partial = { ...partial, panelWidth: bounds.width, panelHeight: partial.panelHeight ?? bounds.height };
+    }
     const next = settings.save(partial || {});
+    if (partial && ["selectedProvider", "panelWidthMode", "panelWidth", "panelHeight"].some((field) => field in partial)) syncPanelSize();
+    if (partial && "panelWidthMode" in partial) panel?.webContents.send("panel-width-mode-changed", next.panelWidthMode);
     applyTheme();
     if (partial && ("refreshMinutes" in partial || "launchAtLogin" in partial)) {
       scheduleRefresh();
@@ -628,7 +715,7 @@ function registerIpc() {
       if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(lastUsage.trayPercent);
       panel?.webContents.send("usage-result", lastUsage);
     }
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     return true;
   });
 
@@ -649,7 +736,7 @@ function registerIpc() {
       if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(lastUsage.trayPercent);
       panel?.webContents.send("usage-result", lastUsage);
     }
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     // Refresh remaining only — skip full CLI re-import wipe path
     try {
       const result = orderedUsage("grok", await grokBilling.fetchAllUsage({ runChat: false }));
@@ -675,7 +762,7 @@ function registerIpc() {
     const entry = data.accounts[entryKey];
     if (!entry) throw new Error("账号不存在");
     secure.upsertEntry(entryKey, { ...entry, labels: list });
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     return list;
   });
 
@@ -696,7 +783,7 @@ function registerIpc() {
     if (fields && fields.method != null) patch.subscription_payment_method = fields.method;
     if (fields && fields.note != null) patch.subscription_note = fields.note;
     secure.upsertEntry(entryKey, patch);
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     return grokBilling.formatSubscriptionLine(patch);
   });
 
@@ -705,7 +792,7 @@ function registerIpc() {
     accountOrder("grok", orderedKeys);
     lastUsage = orderedUsage("grok", lastUsage);
     if (lastUsage) panel?.webContents.send("usage-result", lastUsage);
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     return true;
   });
 
@@ -768,7 +855,7 @@ function registerIpc() {
       const left = secure.listEntries();
       settings.save({ activeEntryKey: left[0]?.entryKey || null });
     }
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     await refreshAll({ skipCliSync: true }).catch(() => {});
     return true;
   });
@@ -778,7 +865,7 @@ function registerIpc() {
     settings.save({ activeEntryKey: null, accountOrder: [] });
     lastUsage = { v: 1, provider: "grok", accounts: [], trayPercent: null };
     if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(null);
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     panel?.webContents.send("usage-result", lastUsage);
     return true;
   });
@@ -793,7 +880,7 @@ function registerIpc() {
       source: "cliproxy-import",
     });
     Object.assign(result, extra);
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     if (result.added > 0 || result.updated > 0 || result.restored > 0) {
       refreshAll({ skipCliSync: true }).catch(() => {});
     }
@@ -891,7 +978,7 @@ function registerIpc() {
   ipcMain.handle("soft-import-cli", async (_e, opts) => {
     const force = !!(opts && opts.force);
     const result = secure.syncFromCli(true, { force });
-    panel?.webContents.send("accounts-changed");
+    notifyAccountsChanged();
     if (result.added > 0 || result.updated > 0 || result.restored > 0 || result.total > 0) {
       // Tokens already merged; skip another CLI pass inside refresh
       await refreshAll({ skipCliSync: true }).catch(() => {});

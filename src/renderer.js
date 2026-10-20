@@ -391,6 +391,7 @@
 
   function renderCards() {
     const list = orderedAccounts(state.usage?.accounts || []);
+    $("#view-home").classList.toggle("single-account", list.length <= 1);
     const empty = $("#empty-state");
     const grid = $("#cards");
     $("#accounts-loading").hidden = !state.accountsLoading || list.length > 0;
@@ -558,6 +559,7 @@
     $("#set-login-item").checked = !!state.settings.launchAtLogin;
     $("#set-tray-pct").checked = state.settings.trayShowPercent !== false;
     $("#set-quota-display").value = state.settings.quotaDisplay === "remaining" ? "remaining" : "used";
+    $("#set-panel-width-mode").value = state.settings.panelWidthMode === "manual" ? "manual" : "auto";
     $("#set-full-emails").checked = state.settings.showFullEmails === true;
     $("#set-proxy-mode").value = state.settings.proxyMode || "auto";
     $("#set-proxy-url").value = state.settings.proxyUrl || "";
@@ -937,6 +939,22 @@
   });
 
   // Settings fields
+  $("#set-panel-width-mode").addEventListener("change", async (e) => {
+    const control = e.target;
+    const previous = state.settings?.panelWidthMode === "manual" ? "manual" : "auto";
+    const value = control.value === "manual" ? "manual" : "auto";
+    state.settings = { ...state.settings, panelWidthMode: value };
+    control.disabled = true;
+    try {
+      await openusage.updateSettings({ panelWidthMode: value });
+    } catch (error) {
+      state.settings = { ...state.settings, panelWidthMode: previous };
+      control.value = previous;
+      $("#operation-message").textContent = error.message || String(error);
+      $("#operation-message").hidden = false;
+    } finally { control.disabled = false; }
+  });
+
   $("#set-quota-display").addEventListener("change", async (e) => {
     const control = e.target;
     const previous = state.settings?.quotaDisplay || "used";
@@ -1106,6 +1124,11 @@
     state.fullscreen = on;
     document.getElementById("app").classList.toggle("fullscreen", on);
     $("#side-nav").hidden = !on;
+  });
+  openusage.onPanelWidthModeChanged?.((mode) => {
+    const value = mode === "manual" ? "manual" : "auto";
+    state.settings = { ...state.settings, panelWidthMode: value };
+    $("#set-panel-width-mode").value = value;
   });
   openusage.onNavigate((view) => {
     if (view === "settings") setView("settings");

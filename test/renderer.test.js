@@ -37,7 +37,7 @@ async function fixture(t, settings = {}, overrides = {}) {
     cliproxyPickImport:async()=>({cancelled:true}),cliproxyPickFolder:async()=>({cancelled:true}),cliproxyImportText:async()=>({added:1}),
     getFullscreen:async()=>false,parseRenewal:async()=>null,
   };
-  for(const name of ["onUsageResult","onLoginState","onThemeChanged","onAccountsChanged","onFullscreenChanged","onPanelShown","onNavigate"])base[name]=(fn)=>{events[name]=fn;};
+  for(const name of ["onUsageResult","onLoginState","onThemeChanged","onAccountsChanged","onFullscreenChanged","onPanelWidthModeChanged","onPanelShown","onNavigate"])base[name]=(fn)=>{events[name]=fn;};
   for(const name of ["testAccountApi","testAllApis","removeAccount","setAccountLabels","setAccountSubscription","reorderAccounts","startBrowserLogin","cancelLogin","copyText","openExternal","openPath","hidePanel","setFullscreen","toggleFullscreen","applyProxy","testProxy"])base[name]||=(async()=>({}));
   Object.assign(base,overrides);
   win.openusage=base;win.alert=(message)=>calls.push(["alert",message]);win.confirm=()=>true;
@@ -115,11 +115,86 @@ test("failed card order save restores known order and keeps account actions unto
   assert.equal(f.calls.some(c=>c[0]==="active"||c[0]==="grok-active"),false);
 });
 
-test("cards stay two-column on wide panels with a single-column narrow fallback",()=>{
+test("cards stay compact with two columns from 660px and a single-column narrow fallback",()=>{
   const css=fs.readFileSync(path.join(__dirname,"..","src/styles.css"),"utf8");
   assert.match(css,/\.cards-grid\.cols-2\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
-  assert.match(css,/@media\s*\(max-width:\s*719px\)[\s\S]*?\.cards-grid\.cols-2\s*\{\s*grid-template-columns:\s*1fr/);
+  assert.match(css,/@media\s*\(max-width:\s*659px\)[\s\S]*?\.cards-grid\.cols-2\s*\{\s*grid-template-columns:\s*1fr/);
+  assert.match(css,/\.cards-grid\s*\{[^}]*max-width:\s*380px/);
+  assert.match(css,/\.cards-grid\.cols-2\s*\{[^}]*max-width:\s*692px/);
   assert.doesNotMatch(css,/cols-3|repeat\(3,|auto-fill/);
+});
+
+test("single-account layout follows the current provider and drops the wide grid immediately",async(t)=>{
+  const f=await fixture(t);
+  assert.equal(f.doc.getElementById("view-home").classList.contains("single-account"),true);
+  assert.equal(f.doc.getElementById("cards").classList.contains("cols-2"),false);
+  f.grok.accounts.push({...f.grok.accounts[0],entryKey:"grok-2",title:"第二账号",enabled:false});
+  f.events.onUsageResult(f.grok);
+  assert.equal(f.doc.getElementById("view-home").classList.contains("single-account"),false);
+  assert.equal(f.doc.getElementById("cards").classList.contains("cols-2"),true);
+  f.click("provider-chatgpt");await until(()=>f.doc.querySelector(".avatar.chatgpt"));
+  assert.equal(f.doc.getElementById("view-home").classList.contains("single-account"),true);
+  assert.equal(f.doc.getElementById("cards").classList.contains("cols-2"),false);
+  f.click("provider-grok");
+  assert.equal(f.doc.getElementById("view-home").classList.contains("single-account"),false);
+  assert.equal(f.doc.getElementById("cards").classList.contains("cols-2"),true);
+});
+
+function setPanelWidthMode(f, value) {
+  const control=f.doc.getElementById("set-panel-width-mode");
+  assert.ok(control,"设置应提供按账号数自动宽度和手动宽度选项");
+  control.value=value;
+  control.dispatchEvent(new f.win.Event("change",{bubbles:true}));
+  return control;
+}
+
+test("panel width defaults to auto and restores an explicit saved manual mode",async(t)=>{
+  const automatic=await fixture(t);
+  const control=automatic.doc.getElementById("set-panel-width-mode");
+  assert.ok(control);
+  assert.equal(control.value,"auto");
+  assert.deepEqual([...control.options].map(option=>option.value),["auto","manual"]);
+  const manual=await fixture(t,{panelWidthMode:"manual",panelWidth:860});
+  assert.equal(manual.doc.getElementById("set-panel-width-mode").value,"manual");
+  assert.equal(manual.config.panelWidth,860);
+  const restored=await fixture(t,{panelWidthMode:"auto",panelWidth:720});
+  assert.equal(restored.doc.getElementById("set-panel-width-mode").value,"auto");
+});
+
+test("panel width mode saves without fetching usage or sending renderer-derived dimensions",async(t)=>{
+  const f=await fixture(t,{panelWidthMode:"auto",panelWidth:720});
+  let requests=0;
+  f.base.refreshUsage=async()=>{requests++;return f.grok;};
+  f.base.chatgptRefresh=async()=>{requests++;return f.chat;};
+  const control=setPanelWidthMode(f,"manual");
+  await until(()=>f.config.panelWidthMode==="manual"&&!control.disabled);
+  assert.equal(f.config.panelWidth,720);
+  setPanelWidthMode(f,"auto");
+  await until(()=>f.config.panelWidthMode==="auto"&&!control.disabled);
+  const saves=f.calls.filter(call=>call[0]==="settings"&&Object.hasOwn(call[1],"panelWidthMode"));
+  assert.deepEqual(saves.map(call=>call[1]),[{panelWidthMode:"manual"},{panelWidthMode:"auto"}]);
+  assert.equal(requests,0);
+  assert.equal(f.doc.querySelector(".card-title").textContent,"原有 Grok 账号");
+});
+
+test("failed panel width mode save restores the previous choice and reports the error",async(t)=>{
+  const f=await fixture(t,{panelWidthMode:"manual"},{updateSettings:async()=>{throw new Error("模拟宽度设置保存失败");}});
+  const control=setPanelWidthMode(f,"auto");
+  await until(()=>!f.doc.getElementById("operation-message").hidden);
+  assert.match(f.doc.getElementById("operation-message").textContent,/模拟宽度设置保存失败/);
+  assert.equal(control.value,"manual");
+  assert.equal(control.disabled,false);
+  assert.equal(f.doc.querySelector(".card-title").textContent,"原有 Grok 账号");
+});
+
+test("native manual resize updates the width mode control without persisting twice",async(t)=>{
+  const f=await fixture(t,{panelWidthMode:"auto"});
+  const count=f.calls.length;
+  f.events.onPanelWidthModeChanged("manual");
+  assert.equal(f.doc.getElementById("set-panel-width-mode").value,"manual");
+  f.events.onPanelWidthModeChanged("auto");
+  assert.equal(f.doc.getElementById("set-panel-width-mode").value,"auto");
+  assert.equal(f.calls.length,count);
 });
 
 test("preserves old Grok card, proxy settings and CLIProxy controls", async(t)=>{
@@ -405,6 +480,7 @@ test("sandboxed preload requires only Electron and exposes named IPC methods",()
   bridge.chatgptReset("chatgpt:local");bridge.chatgptImport("local",{force:true});
   assert.deepEqual(calls,[["chatgpt-reset","chatgpt:local"],["chatgpt-import","local",{force:true}]]);
   assert.equal(bridge.invoke,undefined);assert.equal(bridge.require,undefined);
+  assert.equal(typeof bridge.onPanelWidthModeChanged,"function");
   const main=fs.readFileSync(path.join(root,"electron/main.js"),"utf8");
   assert.match(main,/contextIsolation:\s*true/);assert.match(main,/nodeIntegration:\s*false/);assert.match(main,/sandbox:\s*true/);
   const reset=main.slice(main.indexOf('ipcMain.handle("chatgpt-reset"'),main.indexOf('ipcMain.handle("get-status"'));

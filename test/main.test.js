@@ -15,13 +15,13 @@ const deferred = () => {
 };
 
 // Load the real IPC registrations with no Electron startup, network, or account I/O.
-function fixture(initial = {}) {
-  const handlers = new Map(), sent = [], timeouts = [], images = [], tips = [];
+function fixture(initial = {}, model = {}) {
+  const handlers = new Map(), sent = [], timeouts = [], images = [], tips = [], layouts = [], errors = [];
   const calls = { imports: [], sync: [], refresh: 0, discover: 0, proxy: 0, serviceOptions: null };
-  const cfg = { selectedProvider: "grok", theme: "dark", activeEntryKey: "grok:a", ...initial };
+  const cfg = { selectedProvider: "grok", theme: "dark", activeEntryKey: "grok:a", panelWidthMode: "auto", ...initial };
   const usage = () => ({ provider: "chatgpt", accounts: [], trayPercent: 66 });
   const service = {
-    list: () => [],
+    list: () => model.chatgpt || [],
     refresh: async () => { calls.refresh++; return usage(); },
     getLastUsage: usage,
     importDocuments: (documents) => { calls.imports.push(["text", plain(documents)]); return { added: 1 }; },
@@ -34,10 +34,10 @@ function fixture(initial = {}) {
   let panel, windowOptions;
   class BrowserWindow extends EventEmitter {
     constructor(options) { super(); panel = this; windowOptions = options; this.hidden = 0; this.bounds = {x:0,y:0,width:options.width,height:options.height};this.webContents = { send: (...args) => sent.push(args) }; }
-    loadFile() {} setPosition() {} isDestroyed() { return false; }
+    loadFile() {} setPosition(x,y) {this.bounds.x=x;this.bounds.y=y;} isDestroyed() { return false; }
     isFocused() { return false; } hide() { this.hidden++; }
-    getBounds() { return this.bounds; } setBounds(bounds) {this.bounds={...bounds};}
-    setSize(width,height) {this.bounds.width=width;this.bounds.height=height;}
+    getBounds() { return {...this.bounds}; } setBounds(bounds) {this.bounds={...bounds};this.emit("resized");}
+    setSize(width,height) {this.bounds.width=width;this.bounds.height=height;this.emit("resized");}
     setAlwaysOnTop() {} setSkipTaskbar() {} show() {} focus() {}
   }
   class Tray extends EventEmitter {
@@ -48,7 +48,7 @@ function fixture(initial = {}) {
   Object.assign(app, { requestSingleInstanceLock: () => true, quit: () => {}, whenReady: () => ({ then() {} }), getVersion: () => "test" });
   const dialog = { showMessageBox: async () => ({ response: 0 }), showOpenDialog: async () => ({ canceled: true, filePaths: [] }) };
   const secure = {
-    syncFromCli: () => ({ added: 0 }), listEntries: () => [{ entryKey: "grok:a" }, { entryKey: "grok:b" }],
+    syncFromCli: () => ({ added: 0 }), listEntries: () => model.grok || [{ entryKey: "grok:a" }, { entryKey: "grok:b" }],
     removeEntry: () => true, clearAll: () => {},
     canEncrypt: () => true, cliAuthStatus: () => ({}), maskEmail: (email) => email,
     loadAccounts: () => ({accounts:{"grok:a":{email:"a@example.com"},"grok:b":{email:"b@example.com"}}}),
@@ -58,7 +58,7 @@ function fixture(initial = {}) {
     app, BrowserWindow, Tray, Menu: { buildFromTemplate: (items) => items }, nativeImage: {},
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, dialog,
     shell: { openExternal: async () => {} }, clipboard: {}, nativeTheme: { shouldUseDarkColors: true },
-    screen: {getCursorScreenPoint:()=>({x:0,y:0}),getDisplayNearestPoint:()=>({workArea:{x:0,y:0,width:1920,height:1080}}),getDisplayMatching:()=>({workArea:{x:0,y:0,width:1920,height:1080}})}, session: { defaultSession: {} }, safeStorage: {},
+    screen: {getCursorScreenPoint:()=>({x:0,y:0}),getDisplayNearestPoint:()=>({workArea:model.workArea || {x:0,y:0,width:1920,height:1080}}),getDisplayMatching:()=>({workArea:model.workArea || {x:0,y:0,width:1920,height:1080}})}, session: { defaultSession: {} }, safeStorage: {},
   };
   const modules = {
     electron, path, fs: { existsSync: () => false },
@@ -72,12 +72,12 @@ function fixture(initial = {}) {
   };
   const context = vm.createContext({
     require: (name) => { if (!Object.hasOwn(modules, name)) throw new Error("Unexpected real module: " + name); return modules[name]; },
-    __dirname: path.dirname(sourcePath), console: { log() {}, error() {} },
+    __dirname: path.dirname(sourcePath), console: { log: (...args) => layouts.push(args), error: (...args) => errors.push(args) },
     setTimeout: (fn) => { timeouts.push(fn); return timeouts.length; }, clearTimeout() {},
     setInterval: () => { throw new Error("startup timers must not run"); }, clearInterval() {},
   });
   vm.runInContext(fs.readFileSync(sourcePath, "utf8") + "\nregisterIpc(); createPanel(); createTray();", context, { filename: sourcePath });
-  return { cfg, service, secure, dialog, billing, calls, sent, images, tips, timeouts, panel, windowOptions,
+  return { cfg, service, secure, dialog, billing, calls, sent, images, tips, timeouts, panel, windowOptions, layouts, errors,
     invoke: (name, ...args) => handlers.get(name)({}, ...args) };
 }
 
@@ -302,8 +302,9 @@ test("Grok reorder aligns cached usage, fresh usage and list without changing ac
   assert.equal(f.cfg.activeEntryKey,"grok:a");assert.deepEqual(plain(f.cfg.chatgptAccountOrder),["chatgpt:a"]);
 });
 
-test("panel defaults to two-column width and uses the same size limits after fullscreen", async () => {
-  for(const [cfg,width,height] of [[{},860,680],[{panelWidth:360,panelHeight:480},360,480],[{panelWidth:1200,panelHeight:900},1200,900],[{panelWidth:2000,panelHeight:2000},1400,1200]]) {
+test("manual panel uses the same configured size limits after fullscreen", async () => {
+  for(const [cfg,width,height] of [[{},400,680],[{panelWidth:360,panelHeight:480},360,480],[{panelWidth:1200,panelHeight:900},1200,900],[{panelWidth:2000,panelHeight:2000},1400,1064]]) {
+    cfg.panelWidthMode="manual";
     const f=fixture(cfg);assert.equal(f.windowOptions.width,width);assert.equal(f.windowOptions.height,height);
     await f.invoke("set-fullscreen",true);await f.invoke("set-fullscreen",false);
     assert.equal(f.panel.getBounds().width,width);assert.equal(f.panel.getBounds().height,height);
@@ -311,18 +312,143 @@ test("panel defaults to two-column width and uses the same size limits after ful
   }
 });
 
-test("settings migrate the old 420px default once while preserving custom sizes and other preferences", (t) => {
+test("settings migrate legacy default widths to auto once and preserve custom widths and preferences", (t) => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"openusage-settings-test-"));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const file=path.join(root,"config.json"),module={exports:{}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,"..","lib","settings.js"),"utf8"),{module,require:(name)=>name==="fs"?fs:{configPath:()=>file}});
   const settings=module.exports;
-  assert.equal(settings.load().panelWidth,860);assert.deepEqual(plain(settings.load().chatgptAccountOrder),[]);
-  fs.writeFileSync(file,JSON.stringify({panelWidth:420,panelHeight:640,proxyMode:"custom",showFullEmails:true,accountOrder:["grok:b"]}));
-  let cfg=settings.load();assert.equal(cfg.panelWidth,860);assert.equal(cfg.panelHeight,680);assert.equal(cfg.panelLayoutVersion,1);
-  assert.equal(cfg.proxyMode,"custom");assert.equal(cfg.showFullEmails,true);assert.deepEqual(plain(cfg.accountOrder),["grok:b"]);
-  assert.equal(JSON.parse(fs.readFileSync(file)).panelWidth,860);
-  settings.save({panelWidth:420});assert.equal(settings.load().panelWidth,420);
+  assert.equal(settings.load().panelWidth,400);assert.equal(settings.load().panelWidthMode,"auto");assert.deepEqual(plain(settings.load().chatgptAccountOrder),[]);
+  for(const legacy of [{},{panelWidth:420},{panelWidth:860,panelLayoutVersion:1}]) {
+    fs.writeFileSync(file,JSON.stringify({...legacy,panelHeight:640,proxyMode:"custom",showFullEmails:true,accountOrder:["grok:b"]}));
+    const cfg=settings.load();assert.equal(cfg.panelWidth,400);assert.equal(cfg.panelWidthMode,"auto");assert.equal(cfg.panelLayoutVersion,2);
+    assert.equal(cfg.panelHeight,legacy.panelLayoutVersion===1?640:680);
+    assert.equal(cfg.proxyMode,"custom");assert.equal(cfg.showFullEmails,true);assert.deepEqual(plain(cfg.accountOrder),["grok:b"]);
+    assert.equal(JSON.parse(fs.readFileSync(file)).panelWidth,400);
+    settings.save({panelWidth:420});assert.equal(settings.load().panelWidth,420);
+  }
   fs.writeFileSync(file,JSON.stringify({panelWidth:610,panelHeight:850,theme:"light"}));
-  cfg=settings.load();assert.equal(cfg.panelWidth,610);assert.equal(cfg.panelHeight,850);assert.equal(cfg.theme,"light");
+  let cfg=settings.load();assert.equal(cfg.panelWidth,610);assert.equal(cfg.panelWidthMode,"manual");assert.equal(cfg.panelHeight,850);assert.equal(cfg.theme,"light");
+  fs.writeFileSync(file,JSON.stringify({panelWidth:860,panelWidthMode:"manual",panelLayoutVersion:1}));
+  cfg=settings.load();assert.equal(cfg.panelWidth,860);assert.equal(cfg.panelWidthMode,"manual");
+});
+
+test("auto panel uses 400px for zero or one account and 720px for multiple accounts per provider", async () => {
+  for(const provider of ["grok","chatgpt"]) {
+    for(const count of [0,1,2,12]) {
+      const accounts=Array.from({length:count},(_,i)=>({entryKey:`${provider}:${i}`}));
+      const f=fixture({selectedProvider:provider,panelWidth:860},{[provider]:accounts});
+      assert.equal(f.windowOptions.width,count>1?720:400,`${provider} ${count}`);
+      assert.equal(f.cfg.panelWidth,860,"automatic sizing must not overwrite saved manual width");
+      await f.invoke("set-fullscreen",true);await f.invoke("set-fullscreen",false);
+      assert.equal(f.panel.getBounds().width,count>1?720:400);
+      assert.equal(f.cfg.panelWidthMode,"auto");assert.equal(f.cfg.panelWidth,860);
+    }
+  }
+});
+
+test("provider switch resizes immediately using its own vault without waiting for network", async () => {
+  const f=fixture({panelWidth:860},{grok:[{entryKey:"grok:a"}],chatgpt:[{entryKey:"chatgpt:a"},{entryKey:"chatgpt:b"}]});
+  assert.equal(f.panel.getBounds().width,400);
+  await f.invoke("update-settings",{selectedProvider:"chatgpt"});assert.equal(f.panel.getBounds().width,720);
+  await f.invoke("update-settings",{selectedProvider:"grok"});assert.equal(f.panel.getBounds().width,400);
+  assert.equal(f.calls.refresh,0);assert.equal(f.cfg.panelWidth,860);assert.equal(f.cfg.panelWidthMode,"auto");
+});
+
+test("delete, clear and import recalculate automatic width before refresh completes", async () => {
+  for(const provider of ["grok","chatgpt"]) {
+    const f=fixture({selectedProvider:provider},{[provider]:[{entryKey:`${provider}:a`},{entryKey:`${provider}:b`}]});
+    let cards=[{entryKey:`${provider}:a`},{entryKey:`${provider}:b`}];
+    if(provider==="chatgpt") {
+      f.service.list=()=>cards;f.service.remove=()=>{cards=cards.slice(1);};f.service.clearAll=()=>{cards=[];};
+      f.service.importDocuments=()=>{cards=[...cards,{entryKey:"chatgpt:a"}];return {added:1};};
+      const pending=deferred();f.service.refresh=()=>pending.promise;
+      const remove=f.invoke("chatgpt-remove","chatgpt:a");assert.equal(f.panel.getBounds().width,400);
+      pending.resolve({provider:"chatgpt",accounts:cards});await remove;
+      await f.invoke("chatgpt-import","text","mock-json");assert.equal(f.panel.getBounds().width,720);
+      await f.invoke("chatgpt-clear");assert.equal(f.panel.getBounds().width,400);
+    } else {
+      f.secure.listEntries=()=>cards;f.secure.removeEntry=()=>{cards=cards.slice(1);return true;};f.secure.clearAll=()=>{cards=[];};
+      const pending=deferred();f.billing.fetchAllUsage=()=>pending.promise;
+      const remove=f.invoke("remove-account","grok:a");assert.equal(f.panel.getBounds().width,400);
+      pending.resolve({accounts:cards});await remove;
+      f.secure.syncFromCli=()=>{cards.push({entryKey:"grok:a"});return {added:1};};
+      await f.invoke("soft-import-cli",{force:true});assert.equal(f.panel.getBounds().width,720);
+      await f.invoke("logout-all");assert.equal(f.panel.getBounds().width,400);
+    }
+    assert.equal(f.cfg.panelWidthMode,"auto");
+  }
+});
+
+test("only native will-resize transitions auto to manual and preserves the chosen size", async () => {
+  const f=fixture({panelWidth:860});
+  f.panel.setBounds({...f.panel.getBounds(),width:650,height:700});
+  assert.equal(f.cfg.panelWidthMode,"auto");assert.equal(f.cfg.panelWidth,860);
+  f.panel.emit("will-resize");f.panel.setBounds({...f.panel.getBounds(),width:630,height:710});
+  assert.equal(f.cfg.panelWidthMode,"manual");assert.equal(f.cfg.panelWidth,630);assert.equal(f.cfg.panelHeight,710);
+  assert.deepEqual(plain(f.sent.filter(([event])=>event==="panel-width-mode-changed")),[["panel-width-mode-changed","manual"]]);
+  await f.invoke("update-settings",{selectedProvider:"chatgpt"});assert.equal(f.panel.getBounds().width,630);
+  await f.invoke("set-fullscreen",true);await f.invoke("set-fullscreen",false);
+  assert.equal(f.panel.getBounds().width,630);assert.equal(f.cfg.panelWidth,630);
+});
+
+test("manual mode selection freezes visible size instead of reverting to the old default", async () => {
+  const f=fixture({panelWidth:860},{grok:[{entryKey:"grok:a"}]});
+  await f.invoke("update-settings",{panelWidthMode:"manual"});
+  assert.equal(f.panel.getBounds().width,400);assert.equal(f.cfg.panelWidth,400);assert.equal(f.cfg.panelHeight,680);
+  assert.equal(f.sent.filter(([event])=>event==="panel-width-mode-changed").at(-1)[1],"manual");
+  await f.invoke("update-settings",{panelWidthMode:"auto"});
+  assert.equal(f.sent.filter(([event])=>event==="panel-width-mode-changed").at(-1)[1],"auto");
+  await f.invoke("set-fullscreen",true);await f.invoke("update-settings",{panelWidthMode:"manual"});
+  assert.equal(f.cfg.panelWidth,400);assert.equal(f.cfg.panelHeight,680);
+  await f.invoke("set-fullscreen",false);assert.equal(f.panel.getBounds().width,400);
+});
+
+test("fullscreen ignores automatic resizing and restores the newly selected provider on exit", async () => {
+  const f=fixture({}, {grok:[{entryKey:"grok:a"}],chatgpt:[{entryKey:"chatgpt:a"},{entryKey:"chatgpt:b"}]});
+  await f.invoke("set-fullscreen",true);const fullscreen=f.panel.getBounds();
+  await f.invoke("update-settings",{selectedProvider:"chatgpt"});
+  assert.deepEqual(f.panel.getBounds(),fullscreen);
+  f.panel.emit("will-resize");f.panel.emit("resized");assert.equal(f.cfg.panelWidthMode,"auto");
+  await f.invoke("set-fullscreen",false);assert.equal(f.panel.getBounds().width,720);
+  assert.equal(f.panel.getBounds().height,680);assert.equal(f.cfg.panelWidthMode,"auto");
+});
+
+test("panel auto and manual sizes are constrained to the active display work area", async () => {
+  const workArea={x:1920,y:40,width:640,height:600};
+  for(const panelWidthMode of ["auto","manual"]) {
+    const f=fixture({panelWidthMode,panelWidth:1300,panelHeight:1100},{workArea});
+    assert.equal(f.windowOptions.width,624);assert.equal(f.windowOptions.height,584);
+    f.panel.emit("ready-to-show");
+    let b=f.panel.getBounds();assert.equal(b.x,1928);assert.equal(b.y,48);
+    await f.invoke("set-fullscreen",true);await f.invoke("set-fullscreen",false);
+    b=f.panel.getBounds();assert.equal(b.width,624);assert.equal(b.height,584);assert.equal(b.x,1928);assert.equal(b.y,48);
+  }
+});
+
+test("failed vault reads preserve the current window while provider preference is saved", async () => {
+  const f=fixture();const before=f.panel.getBounds();
+  f.service.list=()=>{throw new Error("mock corrupt vault");};
+  await f.invoke("update-settings",{selectedProvider:"chatgpt"});
+  assert.deepEqual(f.panel.getBounds(),before);assert.equal(f.cfg.selectedProvider,"chatgpt");
+  assert.match(f.errors.at(-1).join(" "),/mock corrupt vault/);
+});
+
+test("width mode validation happens before saving any settings", async () => {
+  const f=fixture({panelWidth:860});
+  for(const value of [null,undefined,"Auto","custom",0,true,{},[]]) {
+    await assert.rejects(f.invoke("update-settings",{panelWidthMode:value,selectedProvider:"chatgpt"}),/窗口宽度模式/);
+    assert.equal(f.cfg.selectedProvider,"grok");assert.equal(f.cfg.panelWidthMode,"auto");assert.equal(f.cfg.panelWidth,860);
+  }
+});
+
+test("layout diagnostics contain only provider, mode and dimensions and log only changes", async () => {
+  const f=fixture({panelWidth:860});assert.equal(f.layouts.length,1);
+  await f.invoke("refresh-usage");await f.invoke("refresh-usage");assert.equal(f.layouts.length,1);
+  await f.invoke("update-settings",{panelWidthMode:"manual"});assert.equal(f.layouts.length,2);
+  await f.invoke("refresh-usage");assert.equal(f.layouts.length,2);
+  f.panel.emit("will-resize");f.panel.setBounds({...f.panel.getBounds(),width:610,height:700});assert.equal(f.layouts.length,3);
+  for(const [name,details] of f.layouts) {
+    assert.equal(name,"[panel-layout]");assert.deepEqual(Object.keys(details).sort(),["height","mode","provider","width"]);
+  }
 });

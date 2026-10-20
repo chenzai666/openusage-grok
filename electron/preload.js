@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld("openusage", {
   onThemeChanged: (cb) => on("theme-changed", cb),
   onAccountsChanged: (cb) => on("accounts-changed", cb),
   onFullscreenChanged: (cb) => on("fullscreen-changed", cb),
+  onPanelWidthModeChanged: (cb) => on("panel-width-mode-changed", cb),
   onPanelShown: (cb) => on("panel-shown", cb),
   onNavigate: (cb) => on("navigate", cb),
 });

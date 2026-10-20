@@ -397,7 +397,10 @@ html.light .icon-btn:hover {
   border-radius: 10px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.04);
+  max-width: 692px;
+  margin-inline: auto;
 }
+.single-account .home-toolbar { max-width: 380px; }
 .home-toolbar[hidden] {
   display: none !important;
 }
@@ -422,14 +425,18 @@ html.light .icon-btn:hover {
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
+  max-width: 380px;
+  margin-inline: auto;
 }
 
 .cards-grid.cols-2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 692px;
 }
-@media (max-width: 719px) {
+@media (max-width: 659px) {
   .cards-grid.cols-2 {
     grid-template-columns: 1fr;
+    max-width: 380px;
   }
 }
 .drag-handle { cursor: grab; color: var(--text-muted); user-select: none; flex-shrink: 0; }
