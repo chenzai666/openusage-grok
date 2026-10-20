@@ -11,6 +11,13 @@ function on(channel, handler) {
 }
 
 contextBridge.exposeInMainWorld("openusage", {
+  chatgptList: () => invoke("chatgpt-list"),
+  chatgptRefresh: () => invoke("chatgpt-refresh"),
+  chatgptRemove: (key) => invoke("chatgpt-remove", key),
+  chatgptActive: (key) => invoke("chatgpt-active", key),
+  chatgptClear: () => invoke("chatgpt-clear"),
+  chatgptImport: (mode, value) => invoke("chatgpt-import", mode, value),
+  chatgptReset: (key) => invoke("chatgpt-reset", key),
   getStatus: () => invoke("get-status"),
   getSettings: () => invoke("get-settings"),
   updateSettings: (partial) => invoke("update-settings", partial),

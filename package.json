@@ -1,7 +1,7 @@
 {
   "name": "openusage-grok",
-  "version": "0.1.18",
-  "description": "OpenUsage Grok — SuperGrok / xAI 多账号用量监控（Windows）",
+  "version": "0.1.19",
+  "description": "OpenUsage Grok - Grok / ChatGPT / Codex 多账号用量监控（Windows）",
   "main": "electron/main.js",
   "author": "chenzai666",
   "license": "MIT",
@@ -15,7 +15,8 @@
     "smoke": "electron script/smoke-billing.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win -p never",
-    "release": "electron-builder --win -p never && node script/publish-release.js"
+    "release": "electron-builder --win -p never && node script/publish-release.js",
+    "test": "node --test"
   },
   "build": {
     "appId": "com.openusage.grok",
@@ -60,7 +61,8 @@
     }
   },
   "devDependencies": {
-    "electron": "^33.2.1",
-    "electron-builder": "^25.1.8"
+    "electron": "^44.9.1",
+    "electron-builder": "^25.1.8",
+    "jsdom": "^26.1.0"
   }
 }

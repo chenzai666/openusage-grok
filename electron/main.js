@@ -11,6 +11,7 @@ const {
   nativeTheme,
   screen,
   session,
+  safeStorage,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -24,6 +25,7 @@ const grokApiTest = require("../lib/grokApiTest");
 const cliproxy = require("../lib/cliproxyImport");
 const { createTrayNativeImage } = require("../lib/trayIcon");
 const { appDataRoot, accountsPath, configPath, cliAuthPath, debugDir } = require("../lib/paths");
+const chatgpt = require("../lib/chatgpt").createService({ root: appDataRoot, safeStorage, request: require("../lib/http").request });
 
 const ALLOWED_EXTERNAL = [
   /^https:\/\/auth\.x\.ai(\/|$)/i,
@@ -41,6 +43,20 @@ let refreshTimer = null;
 let loginPollTimer = null;
 let lastUsage = null;
 let compactBounds = null;
+let dialogDepth = 0;
+
+async function withDialog(action) {
+  dialogDepth++;
+  try { return await action(); } finally { dialogDepth--; }
+}
+
+async function refreshChatgpt() {
+  const result = await chatgpt.refresh();
+  if (!result) return refreshChatgpt();
+  if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(result.trayPercent);
+  if (panel && !panel.isDestroyed()) panel.webContents.send("usage-result", result);
+  return result;
+}
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -95,7 +111,7 @@ function createPanel() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
 
@@ -109,10 +125,10 @@ function createPanel() {
   }
 
   panel.on("blur", () => {
-    if (isFullscreen || isQuitting) return;
+    if (isFullscreen || isQuitting || dialogDepth > 0) return;
     // small delay so clicks on tray still work
     setTimeout(() => {
-      if (!panel || panel.isDestroyed() || isFullscreen) return;
+      if (!panel || panel.isDestroyed() || isFullscreen || dialogDepth > 0) return;
       if (!panel.isFocused()) panel.hide();
     }, 180);
   });
@@ -245,7 +261,7 @@ function updateTrayIcon(percent) {
     const img = createTrayNativeImage(nativeImage, p != null ? p : 0, { size: 32 });
     tray.setImage(img);
     tray.setToolTip(
-      p != null ? `OpenUsage Grok · 周限已用 ${p}%` : "OpenUsage Grok"
+      p != null ? `OpenUsage ${settings.load().selectedProvider === "chatgpt" ? "ChatGPT" : "Grok"} · 周限已用 ${p}%` : "OpenUsage Grok + ChatGPT"
     );
   } catch (e) {
     console.error("tray icon", e);
@@ -318,6 +334,7 @@ function createTray() {
 }
 
 async function refreshAll(opts = {}) {
+  if (settings.load().selectedProvider === "chatgpt") return refreshChatgpt();
   try {
     // Merge CLI tokens only — never drops vault-only (device-login) accounts
     if (opts.skipCliSync !== true) {
@@ -328,8 +345,9 @@ async function refreshAll(opts = {}) {
       }
     }
     const result = await grokBilling.fetchAllUsage({ runChat: !!opts.runChat });
+    result.provider = "grok";
     lastUsage = result;
-    updateTrayIcon(result.trayPercent);
+    if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(result.trayPercent);
     if (panel && !panel.isDestroyed()) {
       panel.webContents.send("usage-result", result);
     }
@@ -338,6 +356,7 @@ async function refreshAll(opts = {}) {
     console.error("refreshAll", e);
     const errPayload = {
       v: 1,
+      provider: "grok",
       accounts: [],
       error: String(e.message || e),
       refreshedAt: new Date().toISOString(),
@@ -395,6 +414,71 @@ function startLoginPoll() {
 }
 
 function registerIpc() {
+  ipcMain.handle("chatgpt-list", async () => chatgpt.list());
+  ipcMain.handle("chatgpt-refresh", async () => refreshChatgpt());
+  ipcMain.handle("chatgpt-remove", async (_e, key) => {
+    if (typeof key !== "string") throw new Error("账号编号无效");
+    chatgpt.remove(key);
+    panel?.webContents.send("accounts-changed");
+    return refreshChatgpt();
+  });
+  ipcMain.handle("chatgpt-active", async (_e, key) => {
+    chatgpt.setActive(key);
+    const result = chatgpt.getLastUsage();
+    if (result) {
+      if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(result.trayPercent);
+      panel?.webContents.send("usage-result", result);
+    }
+    panel?.webContents.send("accounts-changed");
+    return true;
+  });
+  ipcMain.handle("chatgpt-clear", async () => {
+    chatgpt.clearAll();
+    panel?.webContents.send("accounts-changed");
+    return refreshChatgpt();
+  });
+  ipcMain.handle("chatgpt-import", async (_e, mode, value) => {
+    let result;
+    if (mode === "text") result = chatgpt.importDocuments([value]);
+    else if (mode === "local") result = chatgpt.syncLocal({ force: value?.force === true });
+    else if (mode === "scan") {
+      const custom = (settings.load().cliproxyAuthDir || "").trim();
+      const dirs = custom ? [custom] : cliproxy.discoverDirs();
+      result = chatgpt.importPaths(dirs);
+    } else if (mode === "files" || mode === "folder") {
+      const picked = await withDialog(() => dialog.showOpenDialog(panel || undefined, {
+        title: mode === "folder" ? "选择 CLIProxy auth 目录（Codex JSON）" : "选择 CLIProxy Codex 账号 JSON",
+        properties: mode === "folder" ? ["openDirectory"] : ["openFile", "multiSelections"],
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      }));
+      if (picked.canceled || !picked.filePaths.length) return { cancelled: true };
+      result = chatgpt.importPaths(picked.filePaths);
+    } else throw new Error("不支持的导入方式");
+    panel?.webContents.send("accounts-changed");
+    refreshChatgpt().catch((e) => console.error("ChatGPT refresh:", e.message));
+    return result;
+  });
+  ipcMain.handle("chatgpt-reset", async (_e, key) => {
+    let result;
+    try {
+      result = await chatgpt.consumeReset(key, async ({ title, count, pending }) => {
+        const response = await withDialog(() => dialog.showMessageBox(panel || undefined, {
+          type: "warning", title: pending ? "核对重置结果" : "使用额度重置卡",
+          message: pending ? `核对 ${title} 的原重置请求？` : `为 ${title} 使用 1 张额度重置卡？`,
+          detail: pending ? "将复用上次请求编号，不创建新的重置请求。" : `当前可用 ${count} 张。此操作会消耗重置卡，由服务端决定重置窗口。`,
+          buttons: ["取消", pending ? "核对原请求" : "确认使用 1 张"], defaultId: 0, cancelId: 0, noLink: true,
+        }));
+        return response.response === 1;
+      });
+    } catch (e) {
+      let pending = false;
+      try { pending = chatgpt.hasPending(key); } catch { /* Account may have been removed. */ }
+      return { outcome: "error", message: e.message || String(e), pending };
+    }
+    // A failed follow-up refresh must not turn a definitive reset result into a retry.
+    if (result.outcome !== "cancelled") await refreshChatgpt().catch((e) => console.error("ChatGPT post-reset refresh:", e.message));
+    return result;
+  });
   ipcMain.handle("get-status", async () => {
     const cfg = settings.load();
     const accounts = secure.listEntries();
@@ -404,6 +488,7 @@ function registerIpc() {
       accountCount: accounts.length,
       activeEntryKey: cfg.activeEntryKey,
       lastUsage,
+      chatgptLastUsage: chatgpt.getLastUsage(),
       paths: {
         appData: appDataRoot(),
         accounts: accountsPath(),
@@ -432,8 +517,9 @@ function registerIpc() {
         /* ignore */
       }
     }
-    if (partial && "trayShowPercent" in partial) {
-      updateTrayIcon(lastUsage?.trayPercent ?? 0);
+    if (partial && ("trayShowPercent" in partial || "selectedProvider" in partial)) {
+      const usage = next.selectedProvider === "chatgpt" ? chatgpt.getLastUsage() : lastUsage;
+      updateTrayIcon(usage?.trayPercent ?? null);
     }
     if (
       partial &&
@@ -483,7 +569,7 @@ function registerIpc() {
       lastUsage.trayEntryKey = entryKey;
       const t = lastUsage.accounts.find((a) => a.entryKey === entryKey);
       lastUsage.trayPercent = t?.weeklyPercent ?? null;
-      updateTrayIcon(lastUsage.trayPercent);
+      if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(lastUsage.trayPercent);
       panel?.webContents.send("usage-result", lastUsage);
     }
     panel?.webContents.send("accounts-changed");
@@ -504,15 +590,16 @@ function registerIpc() {
       lastUsage.trayEntryKey = settings.load().activeEntryKey;
       const tray = lastUsage.accounts.find((a) => a.entryKey === lastUsage.trayEntryKey);
       lastUsage.trayPercent = tray?.weeklyPercent ?? null;
-      updateTrayIcon(lastUsage.trayPercent);
+      if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(lastUsage.trayPercent);
       panel?.webContents.send("usage-result", lastUsage);
     }
     panel?.webContents.send("accounts-changed");
     // Refresh remaining only — skip full CLI re-import wipe path
     try {
       const result = await grokBilling.fetchAllUsage({ runChat: false });
+      result.provider = "grok";
       lastUsage = result;
-      updateTrayIcon(result.trayPercent);
+      if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(result.trayPercent);
       panel?.webContents.send("usage-result", result);
     } catch (e) {
       console.error("refresh after remove", e);
@@ -630,8 +717,8 @@ function registerIpc() {
   ipcMain.handle("logout-all", async () => {
     secure.clearAll();
     settings.save({ activeEntryKey: null, accountOrder: [] });
-    lastUsage = { v: 1, accounts: [], trayPercent: null };
-    updateTrayIcon(0);
+    lastUsage = { v: 1, provider: "grok", accounts: [], trayPercent: null };
+    if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(0);
     panel?.webContents.send("accounts-changed");
     panel?.webContents.send("usage-result", lastUsage);
     return true;

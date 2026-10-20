@@ -7,6 +7,8 @@
 name: Build Windows
 
 on:
+  pull_request:
+    branches: [main]
   push:
     tags:
       - "v*"
@@ -43,6 +45,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Test
+        run: npm test
 
       - name: Build (portable + NSIS)
         run: npm run dist
