@@ -30,6 +30,8 @@ Windows 托盘应用：监控 **Grok / SuperGrok** 和 **ChatGPT / Codex** 多�
 
 CLIProxy 导入为只读凭据快照，不使用或轮换源账号的 `refresh_token`。访问令牌过期后，请让原 CLIProxy / Codex 完成刷新，再重新导入或同步。程序不修改源凭据文件。
 
+混合 auth 目录按服务识别账号：Grok 导入拒绝明确属于 Codex 或其他服务的文件及令牌发行方，避免把 ChatGPT 凭据混入 xAI 账号库。
+
 ## 开发
 
 ```bash

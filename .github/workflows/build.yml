@@ -70,6 +70,13 @@ jobs:
             dist/OpenUsage-Grok-*-setup.exe
           if-no-files-found: error
 
+      - name: Upload application archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenUsage-Grok-app
+          path: dist/win-unpacked/resources/app.asar
+          if-no-files-found: error
+
       - name: Validate release tag
         if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.create_release)
         shell: bash
