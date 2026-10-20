@@ -11,10 +11,12 @@
     settings: null,
     fullscreen: false,
     loginInfo: null,
-    dragKey: null,
     reauthKey: null,
     resetBusy: false,
     providerRevision: 0,
+    providerCache: {},
+    accountsLoading: true,
+    dragAccount: null,
   };
 
   const base = window.openusage;
@@ -31,6 +33,7 @@
     refreshUsage: (opts) => isChatgpt() ? base.chatgptRefresh() : base.refreshUsage(opts),
     removeAccount: (key) => isChatgpt() ? base.chatgptRemove(key) : base.removeAccount(key),
     setActiveAccount: (key) => isChatgpt() ? base.chatgptActive(key) : base.setActiveAccount(key),
+    reorderAccounts: (keys) => isChatgpt() ? base.chatgptReorder(keys) : base.reorderAccounts(keys),
     testAccountApi: (key) => isChatgpt() ? base.chatgptRefresh() : base.testAccountApi(key),
     testAllApis: () => isChatgpt() ? base.chatgptRefresh() : base.testAllApis(),
     logoutAll: () => isChatgpt() ? base.chatgptClear() : base.logoutAll(),
@@ -40,6 +43,15 @@
     cliproxyPickImport: () => isChatgpt() ? safeImport("files") : base.cliproxyPickImport(),
     cliproxyPickFolder: () => isChatgpt() ? safeImport("folder") : base.cliproxyPickFolder(),
   };
+
+  function orderField() { return isChatgpt() ? "chatgptAccountOrder" : "accountOrder"; }
+
+  function orderedAccounts(accounts) {
+    const configured = state.settings?.[orderField()];
+    const order = Array.isArray(configured) ? configured : [];
+    const rank = new Map(order.map((key, index) => [key, index]));
+    return [...accounts].sort((a, b) => (rank.get(a.entryKey) ?? order.length) - (rank.get(b.entryKey) ?? order.length));
+  }
 
   function updateProviderUi() {
     const chat = isChatgpt();
@@ -66,15 +78,21 @@
     $("#btn-home-test").textContent = chat ? "查询全部额度" : "一键测试全部";
     $("#btn-settings-test-all").textContent = chat ? "查询额度" : "一键测试";
     if (chat) $("#cli-auth-hint").textContent = "本机 Codex 只读同步 access token，不使用 refresh token，也不修改登录文件；从面板删除后不会自动加回，可在这里恢复。";
+    else $("#cli-auth-hint").textContent = "本地 grok login 后点「同步 Grok CLI」即可拉取最新令牌，无需浏览器再登录。";
   }
 
   async function switchProvider(provider) {
     if (provider === state.provider || state.resetBusy) return;
     const revision = ++state.providerRevision;
-    state.provider = provider; state.usage = null; state.accounts = [];
+    state.dragAccount = null;
+    state.providerCache[state.provider] = { usage: state.usage, accounts: state.accounts, loaded: !state.accountsLoading };
+    const cached = state.providerCache[provider];
+    state.provider = provider; state.usage = cached?.usage || null; state.accounts = cached?.accounts || [];
+    state.accountsLoading = !cached?.loaded;
     $("#operation-message").hidden = true;
+    $("#accounts-loading").textContent = "正在加载账号…";
     $("#cliproxy-paste").value = "";
-    updateProviderUi(); renderCards(); setView("home");
+    updateProviderUi(); renderCards(); renderAccountList(); setView("home");
     try {
       await base.updateSettings({ selectedProvider: provider });
       if (revision !== state.providerRevision) return;
@@ -85,6 +103,7 @@
       await openusage.refreshUsage();
     } catch (e) {
       if (revision !== state.providerRevision) return;
+      if (state.accountsLoading) $("#accounts-loading").textContent = "账号加载失败，请重新切换后重试。";
       $("#operation-message").textContent = e.message || String(e); $("#operation-message").hidden = false;
     }
   }
@@ -259,9 +278,10 @@
         </div></div>`
       : "";
 
-    return `<article class="acc-card" data-key="${esc(acc.entryKey)}">
+    return `<article class="acc-card" data-key="${esc(acc.entryKey)}" draggable="true">
       <div class="card-body">
         <div class="card-head">
+          <span class="drag-handle" data-drag-handle draggable="true" title="拖动调整账号顺序" aria-label="拖动调整账号顺序">⠿</span>
           <input type="checkbox" class="tray-check" data-act="enable" title="设为托盘账号" ${acc.enabled ? "checked" : ""} />
           ${avatarMark()}
           <div class="head-main">
@@ -310,14 +330,17 @@
   }
 
   function renderChatgptCard(acc) {
+    const plan = String(acc.planName || "ChatGPT / Codex").replace(/\b(team|plus|pro|business|enterprise|free|edu)\b/gi, (s) => s[0].toUpperCase() + s.slice(1).toLowerCase());
+    const email = acc.emailDisplay || acc.title || acc.emailMasked || "ChatGPT 账号";
     const metrics = (acc.metrics || []).map((m) => metric(m.label, `已用 ${Math.round(m.percent)}%` + (m.resetAt ? " · 重置 " + formatTime(m.resetAt) : ""), m.percent, false)).join("");
-    return `<article class="acc-card" data-key="${esc(acc.entryKey)}">
+    return `<article class="acc-card" data-key="${esc(acc.entryKey)}" draggable="true">
       <div class="card-body"><div class="card-head">
+        <span class="drag-handle" data-drag-handle draggable="true" title="拖动调整账号顺序" aria-label="拖动调整账号顺序">⠿</span>
         <input type="checkbox" class="tray-check" data-act="enable" title="设为托盘账号" ${acc.enabled ? "checked" : ""} />
         <div class="avatar chatgpt" aria-hidden="true"><img src="../assets/chatgpt.svg" width="25" height="25" alt="" /></div>
-        <div class="head-main"><div class="head-row"><span class="badge xai">OpenAI</span><span class="badge ${statusClass(acc.status)}">${esc(acc.status)}</span></div>
-          <div class="card-title">${esc(acc.title)}</div><div class="email-blur">${esc(acc.emailMasked)}</div></div>
-      </div><div class="plan-line">${esc(acc.planName || "ChatGPT / Codex")} · ${esc(acc.source)} · 刷新 ${esc(acc.refreshedAt)}</div>
+        <div class="head-main"><div class="head-row"><span class="badge xai">OpenAI</span><span class="badge chatgpt-plan" aria-label="套餐：${esc(plan)}">${esc(plan)}</span><span class="badge ${statusClass(acc.status)}">${esc(acc.status || "待刷新")}</span></div>
+          <div class="card-title ${state.settings?.showFullEmails ? "chatgpt-email" : ""}">${esc(email)}</div></div>
+      </div><div class="plan-line">${esc(acc.source || "ChatGPT / Codex")}${acc.refreshedAt ? " · 刷新 " + esc(acc.refreshedAt) : ""}</div>
       ${acc.error ? `<div class="unified-note"><span class="uni-ico">ⓘ</span><span>${esc(acc.error)}</span></div>` : ""}</div>
       <div class="card-metrics">${healthDotsHtml(acc.weeklyPercent)}
         <div class="reset-row"><span>额度重置卡 <strong>${acc.resetCount == null ? "待查询" : esc(acc.resetCount) + " 张"}</strong></span>
@@ -333,7 +356,7 @@
   }
 
   function renderHomeToolbar() {
-    const list = state.usage?.accounts || [];
+    const list = orderedAccounts(state.usage?.accounts || []);
     const bar = $("#home-toolbar");
     if (!list.length) {
       bar.hidden = true;
@@ -355,12 +378,13 @@
   }
 
   function renderCards() {
-    const list = state.usage?.accounts || [];
+    const list = orderedAccounts(state.usage?.accounts || []);
     const empty = $("#empty-state");
     const grid = $("#cards");
+    $("#accounts-loading").hidden = !state.accountsLoading || list.length > 0;
     renderHomeToolbar();
     if (!list.length) {
-      empty.hidden = false;
+      empty.hidden = state.accountsLoading;
       grid.innerHTML = "";
       grid.className = "cards-grid";
       return;
@@ -368,24 +392,25 @@
     empty.hidden = true;
     grid.className =
       "cards-grid" +
-      (list.length >= 3 ? " cols-3" : list.length >= 2 ? " cols-2" : "");
+      (list.length >= 2 ? " cols-2" : "");
     grid.innerHTML = list.map(renderCard).join("");
+    bindDrag(grid, ".acc-card");
   }
 
   function renderAccountList() {
     const host = $("#account-list");
-    const list = state.accounts || [];
+    const list = orderedAccounts(state.accounts || []);
     if (!list.length) {
       host.innerHTML = `<p class="muted">暂无账号。可添加或从 ${isChatgpt() ? "Codex / CLIProxy" : "Grok CLI"} 导入。</p>`;
       return;
     }
     host.innerHTML = list
       .map(
-        (a) => `<div class="acc-row" draggable="${!isChatgpt()}" data-key="${esc(a.entryKey)}">
-        ${isChatgpt() ? "" : '<span class="handle" title="拖拽排序">⠿</span>'}
+        (a) => `<div class="acc-row" draggable="true" data-key="${esc(a.entryKey)}">
+        <span class="handle drag-handle" data-drag-handle draggable="true" title="拖动调整账号顺序" aria-label="拖动调整账号顺序">⠿</span>
         <div class="info">
-          <div class="name">${esc(a.labels?.[0] || a.emailMasked || "未命名")}</div>
-          <div class="sub">${esc(a.emailMasked || "")}${a.subscription ? " · " + esc(a.subscription) : ""}</div>
+          <div class="name ${isChatgpt() && state.settings?.showFullEmails ? "email-full" : ""}">${esc(a.emailDisplay || a.labels?.[0] || a.emailMasked || "未命名")}</div>
+          <div class="sub ${isChatgpt() && state.settings?.showFullEmails ? "email-full" : ""}">${esc(a.emailDisplay || a.emailMasked || "")}${a.subscription ? " · " + esc(a.subscription) : ""}</div>
           <div class="tags">${(a.labels || []).map((t) => `<span class="badge tag">${esc(t)}</span>`).join("")}</div>
         </div>
         ${isChatgpt() ? "" : '<button type="button" class="btn sm" data-act="edit-acc">编辑</button>'}
@@ -393,41 +418,65 @@
       </div>`
       )
       .join("");
-    if (!isChatgpt()) bindDrag();
+    bindDrag(host, ".acc-row");
   }
 
-  function bindDrag() {
-    const rows = $$(".acc-row");
+  function bindDrag(host, selector) {
+    const rows = $$(selector, host);
     rows.forEach((row) => {
       row.addEventListener("dragstart", (e) => {
-        // only from handle or name
-        state.dragKey = row.dataset.key;
+        // Only the explicit handle starts a drag; form controls keep their native actions.
+        if (!e.target.closest("[data-drag-handle]") || state.resetBusy) { e.preventDefault(); return; }
+        state.dragAccount = { key: row.dataset.key, provider: state.provider, revision: state.providerRevision };
         row.classList.add("dragging");
         e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("application/x-openusage-account", JSON.stringify(state.dragAccount));
       });
       row.addEventListener("dragend", () => {
         row.classList.remove("dragging");
-        state.dragKey = null;
-        $$(".drop-line").forEach((n) => n.remove());
+        state.dragAccount = null;
+        $$(".drag-over").forEach((n) => n.classList.remove("drag-over"));
       });
       row.addEventListener("dragover", (e) => {
+        const drag = state.dragAccount;
+        if (!drag || drag.provider !== state.provider || drag.revision !== state.providerRevision) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
+        row.classList.add("drag-over");
       });
+      row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
       row.addEventListener("drop", async (e) => {
         e.preventDefault();
-        const from = state.dragKey;
+        row.classList.remove("drag-over");
+        const drag = state.dragAccount;
+        state.dragAccount = null;
+        if (!drag || drag.provider !== state.provider || drag.revision !== state.providerRevision) return;
+        const from = drag.key;
         const to = row.dataset.key;
         if (!from || !to || from === to) return;
-        const keys = state.accounts.map((a) => a.entryKey);
+        const keys = orderedAccounts(state.accounts).map((a) => a.entryKey);
         const fi = keys.indexOf(from);
         const ti = keys.indexOf(to);
         if (fi < 0 || ti < 0) return;
         keys.splice(fi, 1);
         keys.splice(ti, 0, from);
-        await openusage.reorderAccounts(keys);
-        await reloadAccounts();
-        await openusage.refreshUsage();
+        const field = orderField();
+        const previous = state.settings?.[field];
+        state.settings = { ...state.settings, [field]: keys };
+        state.accounts = orderedAccounts(state.accounts);
+        if (state.usage) state.usage = { ...state.usage, accounts: orderedAccounts(state.usage.accounts) };
+        state.providerCache[state.provider] = { usage: state.usage, accounts: state.accounts, loaded: !state.accountsLoading };
+        renderCards(); renderAccountList();
+        try {
+          const saved = await openusage.reorderAccounts(keys);
+          if (saved === false) throw new Error("账号排序保存失败，请重试");
+        } catch (error) {
+          if (drag.revision !== state.providerRevision) return;
+          state.settings[field] = previous;
+          $("#operation-message").textContent = error.message || String(error);
+          $("#operation-message").hidden = false;
+          await reloadAccounts();
+        }
       });
     });
   }
@@ -436,10 +485,19 @@
     const revision = state.providerRevision;
     const accounts = await openusage.listAccounts();
     if (revision !== state.providerRevision) return;
-    state.accounts = accounts;
+    state.accounts = orderedAccounts(accounts);
+    state.accountsLoading = false;
+    // Render known identities before the background network refresh completes.
+    const previous = new Map((state.usage?.accounts || []).map((a) => [a.entryKey, a]));
+    state.usage = { ...state.usage, provider: state.provider, accounts: state.accounts.map((a) => ({
+      ...previous.get(a.entryKey), ...a, provider: state.provider,
+      title: a.title || a.emailDisplay || previous.get(a.entryKey)?.title || a.emailMasked,
+    })) };
+    state.providerCache[state.provider] = { usage: state.usage, accounts: state.accounts, loaded: true };
     const n = state.accounts.length;
     $("#account-count").textContent = n === 1 ? "1 账号" : `${n} 账号`;
     renderAccountList();
+    renderCards();
   }
 
   function formatProxyStatus(proxy) {
@@ -487,6 +545,7 @@
     $("#set-refresh").value = String(state.settings.refreshMinutes || 5);
     $("#set-login-item").checked = !!state.settings.launchAtLogin;
     $("#set-tray-pct").checked = state.settings.trayShowPercent !== false;
+    $("#set-full-emails").checked = state.settings.showFullEmails === true;
     $("#set-proxy-mode").value = state.settings.proxyMode || "auto";
     $("#set-proxy-url").value = state.settings.proxyUrl || "";
     $("#set-proxy-bypass").value =
@@ -881,6 +940,38 @@
   $("#set-tray-pct").addEventListener("change", async (e) => {
     await openusage.updateSettings({ trayShowPercent: e.target.checked });
   });
+  $("#set-full-emails").addEventListener("change", async (e) => {
+    const control = e.target;
+    control.disabled = true;
+    const maskSnapshot = (snapshot) => snapshot && ({ ...snapshot, accounts: snapshot.accounts.map((a) => ({
+      ...a, title: a.emailMasked || "ChatGPT 账号", emailDisplay: a.emailMasked || "ChatGPT 账号",
+    })) });
+    if (!control.checked) {
+      const cache = state.providerCache.chatgpt;
+      if (cache) {
+        cache.usage = maskSnapshot(cache.usage);
+        cache.accounts = maskSnapshot({ accounts: cache.accounts }).accounts;
+      }
+      if (isChatgpt()) {
+        state.usage = maskSnapshot(state.usage);
+        state.accounts = maskSnapshot({ accounts: state.accounts }).accounts;
+        renderCards(); renderAccountList();
+      }
+    }
+    try {
+      await openusage.updateSettings({ showFullEmails: control.checked });
+      state.settings = await openusage.getSettings();
+      await reloadAccounts();
+      // Local display updates must not lock the privacy toggle behind a network request.
+      openusage.refreshUsage().catch((error) => {
+        $("#operation-message").textContent = error.message || String(error);
+        $("#operation-message").hidden = false;
+      });
+    } catch (error) {
+      $("#operation-message").textContent = error.message || String(error);
+      $("#operation-message").hidden = false;
+    } finally { control.disabled = false; }
+  });
 
   async function saveProxyFromForm(applyOnly) {
     const proxyMode = $("#set-proxy-mode").value;
@@ -933,7 +1024,8 @@
   // IPC events
   openusage.onUsageResult((data) => {
     if ((data.provider || "grok") !== state.provider) return;
-    state.usage = data;
+    state.usage = { ...data, accounts: orderedAccounts(data.accounts || []) };
+    state.providerCache[state.provider] = { usage: state.usage, accounts: state.accounts, loaded: !state.accountsLoading };
     renderCards();
     updateRefreshMeta();
     if (data?.accounts?.length && state.view === "login" && !state.loginInfo) {

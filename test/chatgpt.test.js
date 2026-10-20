@@ -242,3 +242,67 @@ test("refresh bounds concurrency and errors never echo bearer credentials", asyn
   assert.equal(max,3);assert.equal(result.accounts.length,8);
   assert.ok(result.accounts.every(a=>a.error));assert.ok(!encode(result).includes("private-token"));
 });
+
+test("primary limit uses its duration, defaults to 5h, and keeps weekly labeling", async (t) => {
+  const f=fixture(t);f.service.importDocuments([encode(auth())]);
+  for (const [seconds,label] of [[undefined,"5h限额"],[18000,"5h限额"],[10800,"3h限额"],[5400,"1h30min限额"],[1800,"30min限额"],[90,"1.5min限额"],[0,"5h限额"],[-1,"5h限额"],["1800","5h限额"]]) {
+    f.respond(()=>({status:200,ok:true,data:{rate_limit:{primary_window:{used_percent:20,limit_window_seconds:seconds},secondary_window:{used_percent:30}}}}));
+    const result=await f.service.refresh();
+    assert.deepEqual(result.accounts[0].metrics.map(metric=>metric.label),[label,"周限额"]);
+    assert.equal(result.accounts[0].weeklyPercent,30);
+  }
+});
+
+test("plan display normalizes known names and preserves unknown subscriptions", async (t) => {
+  const f=fixture(t);f.service.importDocuments([encode(auth("a",{plan_type:"team"}))]);
+  for(const [value,expected] of [["team","Team"],[" PLUS ","Plus"],["pro","Pro"],["free","Free"],["enterprise","Enterprise"],["business","Business"],["edu","Edu"],["go","Go"],["Future Custom","Future Custom"],["","Team"],[undefined,"Team"]]) {
+    f.respond(()=>({status:200,ok:true,data:{plan_type:value}}));
+    assert.equal((await f.service.refresh()).accounts[0].planName,expected);
+  }
+});
+
+test("full-email setting updates list, refreshed cards and cached cards without exposing credentials", async (t) => {
+  const f=fixture(t);let show=false;
+  const service=createService({...f.options,getShowFullEmails:()=>show});
+  service.importDocuments([encode(auth("display"))]);
+  let card=(await service.refresh()).accounts[0];
+  assert.equal(card.title,"di***@example.com");assert.equal(card.emailDisplay,card.title);
+  assert.equal(service.list()[0].emailDisplay,card.title);
+  show=true;
+  assert.equal(service.list()[0].title,"display@example.com");
+  assert.equal(service.list()[0].emailMasked,"di***@example.com");
+  assert.equal(service.getLastUsage().accounts[0].emailDisplay,"display@example.com");
+  assert.equal(service.getLastUsage().accounts[0].title,"display@example.com");
+  assert.equal(f.calls.length,1);
+  card=(await service.refresh()).accounts[0];assert.equal(card.title,"display@example.com");
+  assert.equal(card.emailMasked,"di***@example.com");
+  show=false;
+  assert.equal(service.getLastUsage().accounts[0].title,"di***@example.com");
+  assert.ok(!encode(service.getLastUsage()).includes("display@example.com"));
+  assert.ok(!encode(service.list()).includes("private-token"));
+  assert.ok(!encode(card).includes("private-token"));
+});
+
+test("local account follows email setting and preserves its existing masked fields", async (t) => {
+  const f=fixture(t);let show=false;
+  fs.writeFileSync(path.join(f.root,"native-auth.json"),encode({email:"local@example.com",tokens:{access_token:"native",account_id:"native-a"}}));
+  const service=createService({...f.options,getShowFullEmails:()=>show});
+  assert.equal(service.list()[0].emailMasked,"本机 Codex");
+  assert.equal(service.list()[0].emailDisplay,"lo***@example.com");
+  const card=(await service.refresh()).accounts[0];
+  assert.equal(card.emailMasked,"lo***@example.com");
+  show=true;
+  assert.equal(service.list()[0].title,"local@example.com");
+  assert.equal(service.getLastUsage().accounts[0].title,"local@example.com");
+  fs.unlinkSync(path.join(f.root,"native-auth.json"));show=false;
+  assert.equal(service.getLastUsage().accounts.length,0);
+});
+
+test("email setting changed during an active request applies before refresh returns", async (t) => {
+  let release;const wait=new Promise(resolve=>release=resolve);
+  const f=fixture(t,async()=>{await wait;return {status:200,ok:true,data:{}};});
+  let show=true;const service=createService({...f.options,getShowFullEmails:()=>show});
+  service.importDocuments([encode(auth("display"))]);
+  const pending=service.refresh();show=false;release();
+  assert.equal((await pending).accounts[0].title,"di***@example.com");
+});

@@ -113,6 +113,7 @@
           <!-- Home / cards -->
           <section id="view-home" class="view">
             <p id="operation-message" class="reset-feedback" role="status" hidden></p>
+            <p id="accounts-loading" class="muted" role="status" hidden>正在加载账号…</p>
             <div class="home-toolbar" id="home-toolbar" hidden>
               <div class="home-toolbar-meta" id="home-toolbar-meta"></div>
               <div class="home-toolbar-actions">
@@ -171,6 +172,11 @@
                   <input type="checkbox" id="set-tray-pct" checked />
                   <span>托盘显示周限百分比</span>
                 </label>
+                <label class="check">
+                  <input type="checkbox" id="set-full-emails" />
+                  <span>显示完整账号邮箱（ChatGPT / Codex）</span>
+                </label>
+                <p class="muted sm">仅本界面展示；默认隐藏，截图或共享屏幕时请注意隐私。</p>
 
                 <h3 class="mt">网络代理</h3>
                 <label class="field">

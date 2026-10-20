@@ -1,6 +1,6 @@
 {
   "name": "openusage-grok",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "OpenUsage Grok - Grok / ChatGPT / Codex 多账号用量监控（Windows）",
   "main": "electron/main.js",
   "author": "chenzai666",

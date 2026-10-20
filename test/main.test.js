@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const os = require("node:os");
 const { EventEmitter } = require("node:events");
 
 const sourcePath = path.join(__dirname, "..", "electron", "main.js");
@@ -14,10 +15,10 @@ const deferred = () => {
 };
 
 // Load the real IPC registrations with no Electron startup, network, or account I/O.
-function fixture() {
+function fixture(initial = {}) {
   const handlers = new Map(), sent = [], timeouts = [], images = [], tips = [];
-  const calls = { imports: [], sync: [], refresh: 0, discover: 0, proxy: 0 };
-  const cfg = { selectedProvider: "grok", theme: "dark", activeEntryKey: "grok:a" };
+  const calls = { imports: [], sync: [], refresh: 0, discover: 0, proxy: 0, serviceOptions: null };
+  const cfg = { selectedProvider: "grok", theme: "dark", activeEntryKey: "grok:a", ...initial };
   const usage = () => ({ provider: "chatgpt", accounts: [], trayPercent: 66 });
   const service = {
     list: () => [],
@@ -32,10 +33,12 @@ function fixture() {
   };
   let panel, windowOptions;
   class BrowserWindow extends EventEmitter {
-    constructor(options) { super(); panel = this; windowOptions = options; this.hidden = 0; this.webContents = { send: (...args) => sent.push(args) }; }
+    constructor(options) { super(); panel = this; windowOptions = options; this.hidden = 0; this.bounds = {x:0,y:0,width:options.width,height:options.height};this.webContents = { send: (...args) => sent.push(args) }; }
     loadFile() {} setPosition() {} isDestroyed() { return false; }
     isFocused() { return false; } hide() { this.hidden++; }
-    getBounds() { return { x: 0, y: 0, width: 420, height: 640 }; }
+    getBounds() { return this.bounds; } setBounds(bounds) {this.bounds={...bounds};}
+    setSize(width,height) {this.bounds.width=width;this.bounds.height=height;}
+    setAlwaysOnTop() {} setSkipTaskbar() {} show() {} focus() {}
   }
   class Tray extends EventEmitter {
     setToolTip(value) { tips.push(value); } setImage(value) { images.push(value); }
@@ -47,13 +50,15 @@ function fixture() {
   const secure = {
     syncFromCli: () => ({ added: 0 }), listEntries: () => [{ entryKey: "grok:a" }, { entryKey: "grok:b" }],
     removeEntry: () => true, clearAll: () => {},
+    canEncrypt: () => true, cliAuthStatus: () => ({}), maskEmail: (email) => email,
+    loadAccounts: () => ({accounts:{"grok:a":{email:"a@example.com"},"grok:b":{email:"b@example.com"}}}),
   };
-  const billing = { fetchAllUsage: async () => ({ accounts: [{ entryKey: "grok:a", weeklyPercent: 11 }, { entryKey: "grok:b", weeklyPercent: 22 }], trayPercent: 11 }) };
+  const billing = { formatSubscriptionLine: () => "", fetchAllUsage: async () => ({ accounts: [{ entryKey: "grok:a", weeklyPercent: 11 }, { entryKey: "grok:b", weeklyPercent: 22 }], trayPercent: 11 }) };
   const electron = {
     app, BrowserWindow, Tray, Menu: { buildFromTemplate: (items) => items }, nativeImage: {},
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, dialog,
     shell: { openExternal: async () => {} }, clipboard: {}, nativeTheme: { shouldUseDarkColors: true },
-    screen: {}, session: { defaultSession: {} }, safeStorage: {},
+    screen: {getCursorScreenPoint:()=>({x:0,y:0}),getDisplayNearestPoint:()=>({workArea:{x:0,y:0,width:1920,height:1080}}),getDisplayMatching:()=>({workArea:{x:0,y:0,width:1920,height:1080}})}, session: { defaultSession: {} }, safeStorage: {},
   };
   const modules = {
     electron, path, fs: { existsSync: () => false },
@@ -63,7 +68,7 @@ function fixture() {
     "../lib/cliproxyImport": { discoverDirs: () => { calls.discover++; return ["mock-default-auth-dir"]; } },
     "../lib/trayIcon": { createTrayNativeImage: (_native, percent) => ({ percent }) },
     "../lib/paths": Object.fromEntries(["appDataRoot", "accountsPath", "configPath", "cliAuthPath", "debugDir"].map((name) => [name, () => "mock-only-path"])),
-    "../lib/chatgpt": { createService: () => service },
+    "../lib/chatgpt": { createService: (options) => { calls.serviceOptions = options; return service; } },
   };
   const context = vm.createContext({
     require: (name) => { if (!Object.hasOwn(modules, name)) throw new Error("Unexpected real module: " + name); return modules[name]; },
@@ -72,7 +77,7 @@ function fixture() {
     setInterval: () => { throw new Error("startup timers must not run"); }, clearInterval() {},
   });
   vm.runInContext(fs.readFileSync(sourcePath, "utf8") + "\nregisterIpc(); createPanel(); createTray();", context, { filename: sourcePath });
-  return { cfg, service, dialog, billing, calls, sent, images, tips, timeouts, panel, windowOptions,
+  return { cfg, service, secure, dialog, billing, calls, sent, images, tips, timeouts, panel, windowOptions,
     invoke: (name, ...args) => handlers.get(name)({}, ...args) };
 }
 
@@ -81,6 +86,17 @@ test("main window keeps renderer sandbox and isolation enabled", () => {
   assert.equal(f.windowOptions.webPreferences.sandbox,true);
   assert.equal(f.windowOptions.webPreferences.contextIsolation,true);
   assert.equal(f.windowOptions.webPreferences.nodeIntegration,false);
+});
+
+test("ChatGPT email privacy setting is read live and defaults to masked", async () => {
+  const f=fixture();
+  assert.equal(f.calls.serviceOptions.getShowFullEmails(),false);
+  await f.invoke("update-settings",{showFullEmails:true});
+  assert.equal(f.calls.serviceOptions.getShowFullEmails(),true);
+  await f.invoke("update-settings",{showFullEmails:false});
+  assert.equal(f.calls.serviceOptions.getShowFullEmails(),false);
+  f.cfg.showFullEmails="true";
+  assert.equal(f.calls.serviceOptions.getShowFullEmails(),false);
 });
 
 test("reset native confirmation defaults to cancel and keeps panel open", async () => {
@@ -177,4 +193,77 @@ test("shared proxy controls remain available independently of selected provider"
   await f.invoke("apply-proxy");await f.invoke("test-proxy");
   await f.invoke("update-settings",{proxyMode:"custom",proxyUrl:"http://127.0.0.1:2080"});
   assert.equal(f.calls.proxy,3);assert.equal(f.cfg.proxyMode,"custom");
+});
+
+test("ChatGPT order is persisted, deduplicated and used by list, refresh, status and active results", async () => {
+  const f=fixture({selectedProvider:"chatgpt",accountOrder:["grok:b","grok:a"],chatgptAccountOrder:["chatgpt:stale","chatgpt:b","chatgpt:b"]});
+  const cards=[{entryKey:"chatgpt:a",enabled:true},{entryKey:"chatgpt:b",enabled:false},{entryKey:"chatgpt:c",enabled:false}];
+  f.service.list=()=>cards;
+  const cached={provider:"chatgpt",accounts:cards,trayEntryKey:"chatgpt:a",trayPercent:17};
+  f.service.getLastUsage=()=>cached;f.service.refresh=async()=>cached;
+  const keys=(accounts)=>accounts.map(a=>a.entryKey);
+  assert.deepEqual(plain(keys(await f.invoke("chatgpt-list"))),["chatgpt:b","chatgpt:a","chatgpt:c"]);
+  assert.deepEqual(plain(f.cfg.chatgptAccountOrder),["chatgpt:b","chatgpt:a","chatgpt:c"]);
+  await f.invoke("chatgpt-reorder",["chatgpt:c","chatgpt:unknown","chatgpt:c","chatgpt:b"]);
+  const expected=["chatgpt:c","chatgpt:b","chatgpt:a"];
+  assert.deepEqual(plain(f.cfg.chatgptAccountOrder),expected);
+  assert.deepEqual(plain(f.cfg.accountOrder),["grok:b","grok:a"]);
+  assert.deepEqual(plain(keys((await f.invoke("chatgpt-refresh")).accounts)),expected);
+  assert.deepEqual(plain(keys((await f.invoke("get-status")).chatgptLastUsage.accounts)),expected);
+  await f.invoke("chatgpt-active","chatgpt:a");
+  const emitted=f.sent.filter(([event])=>event==="usage-result").at(-1)[1];
+  assert.deepEqual(plain(keys(emitted.accounts)),expected);
+  assert.equal(emitted.trayEntryKey,"chatgpt:a");assert.equal(f.cfg.activeEntryKey,"grok:a");
+  assert.deepEqual(cached.accounts.map(a=>a.entryKey),["chatgpt:a","chatgpt:b","chatgpt:c"]);
+  f.service.list=()=>[cards[0],cards[2]];
+  assert.deepEqual(plain(keys(await f.invoke("chatgpt-list"))),["chatgpt:c","chatgpt:a"]);
+  assert.deepEqual(plain(f.cfg.chatgptAccountOrder),["chatgpt:c","chatgpt:a"]);
+});
+
+test("reorder IPC rejects malformed and cross-provider keys without changing saved order", async () => {
+  const f=fixture({chatgptAccountOrder:["chatgpt:a"],accountOrder:["grok:a"]});
+  f.service.list=()=>[{entryKey:"chatgpt:a"}];
+  for(const [channel,values] of [["chatgpt-reorder",[undefined,null,"chatgpt:a",["grok:a"],[123],[{}]]],["reorder-accounts",[undefined,null,"grok:a",["chatgpt:a"],[123],[{}]]]]) {
+    for(const value of values) await assert.rejects(f.invoke(channel,value),/排序/);
+  }
+  assert.deepEqual(plain(f.cfg.chatgptAccountOrder),["chatgpt:a"]);
+  assert.deepEqual(plain(f.cfg.accountOrder),["grok:a"]);
+  await assert.rejects(f.invoke("update-settings",{chatgptAccountOrder:["grok:a"]}),/排序/);
+  await assert.rejects(f.invoke("update-settings",{accountOrder:["chatgpt:a"]}),/排序/);
+});
+
+test("Grok reorder aligns cached usage, fresh usage and list without changing active selection", async () => {
+  const f=fixture({chatgptAccountOrder:["chatgpt:a"]});f.service.list=()=>[{entryKey:"chatgpt:a"}];await f.invoke("refresh-usage");
+  await f.invoke("reorder-accounts",["grok:b","grok:stale","grok:b"]);
+  const expected=["grok:b","grok:a"],keys=accounts=>plain(accounts.map(a=>a.entryKey));
+  assert.deepEqual(plain(f.cfg.accountOrder),expected);
+  assert.deepEqual(keys(await f.invoke("list-accounts")),expected);
+  assert.deepEqual(keys((await f.invoke("get-status")).lastUsage.accounts),expected);
+  assert.deepEqual(keys((await f.invoke("refresh-usage")).accounts),expected);
+  assert.equal(f.cfg.activeEntryKey,"grok:a");assert.deepEqual(plain(f.cfg.chatgptAccountOrder),["chatgpt:a"]);
+});
+
+test("panel defaults to two-column width and uses the same size limits after fullscreen", async () => {
+  for(const [cfg,width,height] of [[{},860,680],[{panelWidth:360,panelHeight:480},360,480],[{panelWidth:1200,panelHeight:900},1200,900],[{panelWidth:2000,panelHeight:2000},1400,1200]]) {
+    const f=fixture(cfg);assert.equal(f.windowOptions.width,width);assert.equal(f.windowOptions.height,height);
+    await f.invoke("set-fullscreen",true);await f.invoke("set-fullscreen",false);
+    assert.equal(f.panel.getBounds().width,width);assert.equal(f.panel.getBounds().height,height);
+    assert.equal(f.windowOptions.minWidth,360);
+  }
+});
+
+test("settings migrate the old 420px default once while preserving custom sizes and other preferences", (t) => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"openusage-settings-test-"));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const file=path.join(root,"config.json"),module={exports:{}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,"..","lib","settings.js"),"utf8"),{module,require:(name)=>name==="fs"?fs:{configPath:()=>file}});
+  const settings=module.exports;
+  assert.equal(settings.load().panelWidth,860);assert.deepEqual(plain(settings.load().chatgptAccountOrder),[]);
+  fs.writeFileSync(file,JSON.stringify({panelWidth:420,panelHeight:640,proxyMode:"custom",showFullEmails:true,accountOrder:["grok:b"]}));
+  let cfg=settings.load();assert.equal(cfg.panelWidth,860);assert.equal(cfg.panelHeight,680);assert.equal(cfg.panelLayoutVersion,1);
+  assert.equal(cfg.proxyMode,"custom");assert.equal(cfg.showFullEmails,true);assert.deepEqual(plain(cfg.accountOrder),["grok:b"]);
+  assert.equal(JSON.parse(fs.readFileSync(file)).panelWidth,860);
+  settings.save({panelWidth:420});assert.equal(settings.load().panelWidth,420);
+  fs.writeFileSync(file,JSON.stringify({panelWidth:610,panelHeight:850,theme:"light"}));
+  cfg=settings.load();assert.equal(cfg.panelWidth,610);assert.equal(cfg.panelHeight,850);assert.equal(cfg.theme,"light");
 });

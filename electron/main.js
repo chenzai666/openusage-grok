@@ -25,7 +25,8 @@ const grokApiTest = require("../lib/grokApiTest");
 const cliproxy = require("../lib/cliproxyImport");
 const { createTrayNativeImage } = require("../lib/trayIcon");
 const { appDataRoot, accountsPath, configPath, cliAuthPath, debugDir } = require("../lib/paths");
-const chatgpt = require("../lib/chatgpt").createService({ root: appDataRoot, safeStorage, request: require("../lib/http").request });
+const chatgpt = require("../lib/chatgpt").createService({ root: appDataRoot, safeStorage, request: require("../lib/http").request,
+  getShowFullEmails: () => settings.load().showFullEmails === true });
 
 const ALLOWED_EXTERNAL = [
   /^https:\/\/auth\.x\.ai(\/|$)/i,
@@ -50,9 +51,49 @@ async function withDialog(action) {
   try { return await action(); } finally { dialogDepth--; }
 }
 
+function panelSize(cfg = settings.load()) {
+  const width = Number.isFinite(cfg.panelWidth) && cfg.panelWidth > 0 ? cfg.panelWidth : 860;
+  const height = Number.isFinite(cfg.panelHeight) && cfg.panelHeight > 0 ? cfg.panelHeight : 680;
+  return { width: Math.max(360, Math.min(1400, width)), height: Math.max(480, Math.min(1200, height)) };
+}
+
+function accountOrder(provider, requested) {
+  const chat = provider === "chatgpt";
+  const entries = chat ? chatgpt.list() : secure.listEntries();
+  const known = new Set(entries.map((entry) => entry.entryKey));
+  const field = chat ? "chatgptAccountOrder" : "accountOrder";
+  const cfg = settings.load();
+  const saved = cfg[field];
+  const explicit = requested !== undefined;
+  if (explicit && (!Array.isArray(requested) || requested.length > 10000 || requested.some((key) => typeof key !== "string" || key.length > 1024))) {
+    throw new Error("账号排序必须是有效编号数组");
+  }
+  if (explicit && requested.some((key) => chat ? !key.startsWith("chatgpt:") : key.startsWith("chatgpt:"))) {
+    throw new Error("不能混合不同服务的账号排序");
+  }
+  const order = [];
+  for (const key of (explicit ? requested : Array.isArray(saved) ? saved : [])) {
+    if (known.has(key) && !order.includes(key)) order.push(key);
+  }
+  for (const key of known) if (!order.includes(key)) order.push(key);
+  if (JSON.stringify(saved) !== JSON.stringify(order)) settings.save({ [field]: order });
+  return order;
+}
+
+function orderedAccounts(provider, accounts) {
+  const order = accountOrder(provider);
+  const byKey = new Map(accounts.map((account) => [account.entryKey, account]));
+  return order.filter((key) => byKey.has(key)).map((key) => byKey.get(key));
+}
+
+function orderedUsage(provider, usage) {
+  return usage ? { ...usage, accounts: orderedAccounts(provider, usage.accounts || []) } : null;
+}
+
 async function refreshChatgpt() {
-  const result = await chatgpt.refresh();
-  if (!result) return refreshChatgpt();
+  const refreshed = await chatgpt.refresh();
+  if (!refreshed) return refreshChatgpt();
+  const result = orderedUsage("chatgpt", refreshed);
   if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(result.trayPercent);
   if (panel && !panel.isDestroyed()) panel.webContents.send("usage-result", result);
   return result;
@@ -89,8 +130,7 @@ function applyTheme() {
 
 function createPanel() {
   const cfg = settings.load();
-  const w = Math.max(360, Math.min(900, cfg.panelWidth || 420));
-  const h = Math.max(480, Math.min(1200, cfg.panelHeight || 640));
+  const { width: w, height: h } = panelSize(cfg);
 
   panel = new BrowserWindow({
     width: w,
@@ -241,9 +281,7 @@ function setFullscreenMode(on) {
   } else {
     panel.setAlwaysOnTop(true);
     panel.setSkipTaskbar(true);
-    const cfg = settings.load();
-    const w = Math.max(360, cfg.panelWidth || 420);
-    const h = Math.max(480, cfg.panelHeight || 640);
+    const { width: w, height: h } = panelSize();
     panel.setSize(w, h);
     // Always re-snap to taskbar — do not restore old bounds (causes "flying")
     positionNearTaskbar();
@@ -344,7 +382,7 @@ async function refreshAll(opts = {}) {
         console.error("cli-sync on refresh", e);
       }
     }
-    const result = await grokBilling.fetchAllUsage({ runChat: !!opts.runChat });
+    const result = orderedUsage("grok", await grokBilling.fetchAllUsage({ runChat: !!opts.runChat }));
     result.provider = "grok";
     lastUsage = result;
     if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(result.trayPercent);
@@ -414,8 +452,16 @@ function startLoginPoll() {
 }
 
 function registerIpc() {
-  ipcMain.handle("chatgpt-list", async () => chatgpt.list());
+  ipcMain.handle("chatgpt-list", async () => orderedAccounts("chatgpt", chatgpt.list()));
   ipcMain.handle("chatgpt-refresh", async () => refreshChatgpt());
+  ipcMain.handle("chatgpt-reorder", async (_e, keys) => {
+    if (!Array.isArray(keys)) throw new Error("账号排序必须是有效编号数组");
+    accountOrder("chatgpt", keys);
+    const result = orderedUsage("chatgpt", chatgpt.getLastUsage());
+    if (result) panel?.webContents.send("usage-result", result);
+    panel?.webContents.send("accounts-changed");
+    return true;
+  });
   ipcMain.handle("chatgpt-remove", async (_e, key) => {
     if (typeof key !== "string") throw new Error("账号编号无效");
     chatgpt.remove(key);
@@ -424,7 +470,7 @@ function registerIpc() {
   });
   ipcMain.handle("chatgpt-active", async (_e, key) => {
     chatgpt.setActive(key);
-    const result = chatgpt.getLastUsage();
+    const result = orderedUsage("chatgpt", chatgpt.getLastUsage());
     if (result) {
       if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(result.trayPercent);
       panel?.webContents.send("usage-result", result);
@@ -487,8 +533,8 @@ function registerIpc() {
       encrypted: secure.canEncrypt(),
       accountCount: accounts.length,
       activeEntryKey: cfg.activeEntryKey,
-      lastUsage,
-      chatgptLastUsage: chatgpt.getLastUsage(),
+      lastUsage: orderedUsage("grok", lastUsage),
+      chatgptLastUsage: orderedUsage("chatgpt", chatgpt.getLastUsage()),
       paths: {
         appData: appDataRoot(),
         accounts: accountsPath(),
@@ -505,6 +551,11 @@ function registerIpc() {
 
   ipcMain.handle("get-settings", async () => settings.load());
   ipcMain.handle("update-settings", async (_e, partial) => {
+    for (const field of ["chatgptAccountOrder", "accountOrder"]) {
+      if (partial && field in partial && !Array.isArray(partial[field])) throw new Error("账号排序必须是有效编号数组");
+    }
+    if (partial && "chatgptAccountOrder" in partial) partial = { ...partial, chatgptAccountOrder: accountOrder("chatgpt", partial.chatgptAccountOrder) };
+    if (partial && "accountOrder" in partial) partial = { ...partial, accountOrder: accountOrder("grok", partial.accountOrder) };
     const next = settings.save(partial || {});
     applyTheme();
     if (partial && ("refreshMinutes" in partial || "launchAtLogin" in partial)) {
@@ -540,7 +591,7 @@ function registerIpc() {
   ipcMain.handle("list-accounts", async () => {
     const data = secure.loadAccounts();
     const cfg = settings.load();
-    return Object.entries(data.accounts || {}).map(([entryKey, entry]) => ({
+    return orderedAccounts("grok", Object.entries(data.accounts || {}).map(([entryKey, entry]) => ({
       entryKey,
       email: entry.email || entry.user_email || null,
       emailMasked: secure.maskEmail(entry.email || entry.user_email || ""),
@@ -557,7 +608,7 @@ function registerIpc() {
           : entry.plan_name || null,
       enabled: cfg.activeEntryKey === entryKey,
       source: entry.source || null,
-    }));
+    })));
   });
 
   ipcMain.handle("set-active-account", async (_e, entryKey) => {
@@ -596,7 +647,7 @@ function registerIpc() {
     panel?.webContents.send("accounts-changed");
     // Refresh remaining only — skip full CLI re-import wipe path
     try {
-      const result = await grokBilling.fetchAllUsage({ runChat: false });
+      const result = orderedUsage("grok", await grokBilling.fetchAllUsage({ runChat: false }));
       result.provider = "grok";
       lastUsage = result;
       if (settings.load().selectedProvider !== "chatgpt") updateTrayIcon(result.trayPercent);
@@ -645,8 +696,10 @@ function registerIpc() {
   });
 
   ipcMain.handle("reorder-accounts", async (_e, orderedKeys) => {
-    if (!Array.isArray(orderedKeys)) return false;
-    settings.save({ accountOrder: orderedKeys });
+    if (!Array.isArray(orderedKeys)) throw new Error("账号排序必须是有效编号数组");
+    accountOrder("grok", orderedKeys);
+    lastUsage = orderedUsage("grok", lastUsage);
+    if (lastUsage) panel?.webContents.send("usage-result", lastUsage);
     panel?.webContents.send("accounts-changed");
     return true;
   });
@@ -657,6 +710,7 @@ function registerIpc() {
       const idx = lastUsage.accounts.findIndex((a) => a.entryKey === entryKey);
       if (idx >= 0) lastUsage.accounts[idx] = card;
       else lastUsage.accounts.push(card);
+      lastUsage = orderedUsage("grok", lastUsage);
       panel?.webContents.send("usage-result", lastUsage);
     }
     return card;
@@ -665,7 +719,7 @@ function registerIpc() {
   ipcMain.handle("test-all-apis", async () => {
     const result = await grokApiTest.testAllAccounts();
     if (lastUsage) {
-      lastUsage.accounts = result.accounts;
+      lastUsage.accounts = orderedAccounts("grok", result.accounts);
       panel?.webContents.send("usage-result", lastUsage);
     }
     return result;

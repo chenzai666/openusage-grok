@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("openusage", {
   chatgptClear: () => invoke("chatgpt-clear"),
   chatgptImport: (mode, value) => invoke("chatgpt-import", mode, value),
   chatgptReset: (key) => invoke("chatgpt-reset", key),
+  chatgptReorder: (keys) => invoke("chatgpt-reorder", keys),
   getStatus: () => invoke("get-status"),
   getSettings: () => invoke("get-settings"),
   updateSettings: (partial) => invoke("update-settings", partial),

@@ -427,24 +427,16 @@ html.light .icon-btn:hover {
 .cards-grid.cols-2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.cards-grid.cols-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-@media (max-width: 700px) {
-  .cards-grid.cols-2,
-  .cards-grid.cols-3 {
+@media (max-width: 719px) {
+  .cards-grid.cols-2 {
     grid-template-columns: 1fr;
   }
 }
-
-.app.fullscreen .cards-grid {
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-}
-.app.fullscreen .cards-grid.cols-2,
-.app.fullscreen .cards-grid.cols-3 {
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-}
+.drag-handle { cursor: grab; color: var(--text-muted); user-select: none; flex-shrink: 0; }
+.card-head > .drag-handle { margin-top: 7px; font-size: 17px; }
+.drag-handle:active { cursor: grabbing; }
+.acc-card.dragging, .acc-row.dragging { opacity: 0.45; }
+.acc-card.drag-over, .acc-row.drag-over { outline: 2px solid var(--ok); outline-offset: -2px; }
 
 /* 账号卡片固定深色（与参考图一致），不随外壳浅色主题变白底 */
 .acc-card {
@@ -549,6 +541,29 @@ html.light .avatar {
 .badge.xai {
   background: transparent;
   color: rgba(255, 255, 255, 0.7);
+}
+.badge.chatgpt-plan {
+  font-size: 12px;
+  font-weight: 750;
+  padding: 3px 8px;
+  color: #e6f5ff;
+  border-color: #569cd1;
+  background: #20455f;
+}
+html.light .badge.chatgpt-plan {
+  color: #12456b;
+  border-color: #8ab9db;
+  background: #e2f1fc;
+}
+.card-title.chatgpt-email {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.acc-row .info .email-full {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 .badge.status-ok {
   color: #34d399;

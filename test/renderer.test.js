@@ -17,9 +17,9 @@ async function fixture(t) {
   // Drain their microtasks before destroying the document they still render into.
   t.after(async()=>{await new Promise(setImmediate);dom.window.close();});
   const win=dom.window,doc=win.document,events={},calls=[];
-  const config={theme:"dark",refreshMinutes:5,proxyMode:"auto",selectedProvider:"grok"};
+  const config={theme:"dark",refreshMinutes:5,proxyMode:"auto",selectedProvider:"grok",showFullEmails:false};
   const grok={v:1,provider:"grok",refreshedAt:new Date().toISOString(),accounts:[{entryKey:"grok-1",title:"原有 Grok 账号",emailMasked:"gr***@example.com",status:"正常",labels:[],weeklyPercent:7,planName:"SuperGrok",enabled:true}]};
-  const chat={v:1,provider:"chatgpt",refreshedAt:new Date().toISOString(),accounts:[{provider:"chatgpt",entryKey:"chatgpt:local",title:"本机 Codex",emailMasked:"te***@example.com",source:"本机 Codex（只读）",status:"正常",planName:"Plus",weeklyPercent:24,resetCount:1,metrics:[{label:"会话限额",percent:16},{label:"周限额",percent:24}],enabled:true}]};
+  const chat={v:1,provider:"chatgpt",refreshedAt:new Date().toISOString(),accounts:[{provider:"chatgpt",entryKey:"chatgpt:local",title:"本机 Codex",emailMasked:"te***@example.com",source:"本机 Codex（只读）",status:"正常",planName:"Plus",weeklyPercent:24,resetCount:1,metrics:[{label:"5h限额",percent:16},{label:"周限额",percent:24}],enabled:true}]};
   const base={
     getSettings:async()=>({...config}),getStatus:async()=>({version:"0.1.19",encrypted:true,dark:true,cliAuth:{exists:false},lastUsage:grok,chatgptLastUsage:chat}),
     updateSettings:async(p)=>Object.assign(config,p),getProxyStatus:async()=>({source:"system",mode:"system"}),
@@ -30,6 +30,8 @@ async function fixture(t) {
     chatgptRemove:async(key)=>{calls.push(["remove",key]);chat.accounts=chat.accounts.filter(a=>a.entryKey!==key);events.onUsageResult?.(chat);},
     chatgptReset:async(key)=>{calls.push(["reset",key]);return {outcome:"reset",message:"额度重置成功"};},
     chatgptActive:async(key)=>calls.push(["active",key]),setActiveAccount:async(key)=>calls.push(["grok-active",key]),
+    chatgptReorder:async(keys)=>{calls.push(["chat-reorder",[...keys]]);config.chatgptAccountOrder=[...keys];return true;},
+    reorderAccounts:async(keys)=>{calls.push(["grok-reorder",[...keys]]);config.accountOrder=[...keys];return true;},
     chatgptClear:async()=>{},logoutAll:async()=>{},cliproxyDiscover:async()=>({discovered:[]}),
     cliproxyScanDefault:async()=>{calls.push(["grok-scan"]);return {added:1,total:1,scanned:1};},
     cliproxyPickImport:async()=>({cancelled:true}),cliproxyPickFolder:async()=>({cancelled:true}),cliproxyImportText:async()=>({added:1}),
@@ -41,8 +43,83 @@ async function fixture(t) {
   win.eval(fs.readFileSync(path.join(root,"src/renderer.js"),"utf8"));
   await until(()=>doc.querySelector(".card-title")?.textContent==="原有 Grok 账号");
   await new Promise(setImmediate);
-  return {win,doc,base,events,calls,chat,config,click:(id)=>doc.getElementById(id).click()};
+  return {win,doc,base,events,calls,chat,grok,config,click:(id)=>doc.getElementById(id).click()};
 }
+
+function dragEvent(f, element, type, transfer = { effectAllowed: "", dropEffect: "", setData() {} }) {
+  const event=new f.win.Event(type,{bubbles:true,cancelable:true});
+  Object.defineProperty(event,"dataTransfer",{value:transfer});
+  element.dispatchEvent(event);return event;
+}
+
+const cardKeys=(f)=>[...f.doc.querySelectorAll("#cards .acc-card")].map(n=>n.dataset.key);
+
+test("Grok card handles reorder immediately and survive refresh without changing enabled account",async(t)=>{
+  const f=await fixture(t);
+  f.grok.accounts.push({...f.grok.accounts[0],entryKey:"grok-2",title:"第二账号",enabled:false});
+  f.events.onAccountsChanged();await until(()=>f.doc.querySelectorAll(".acc-row").length===2);
+  f.events.onUsageResult(f.grok);
+  const first=f.doc.querySelector('[data-key="grok-1"]');
+  const invalid=dragEvent(f,first.querySelector('[data-act="delete"]'),"dragstart");
+  assert.equal(invalid.defaultPrevented,true);
+  dragEvent(f,first.querySelector("[data-drag-handle]"),"dragstart");
+  dragEvent(f,f.doc.querySelector('#cards [data-key="grok-2"]'),"drop");
+  assert.deepEqual(cardKeys(f),["grok-2","grok-1"]);
+  await until(()=>f.calls.some(c=>c[0]==="grok-reorder"));
+  assert.deepEqual(f.config.accountOrder,["grok-2","grok-1"]);
+  f.events.onUsageResult(f.grok);
+  assert.deepEqual(cardKeys(f),["grok-2","grok-1"]);
+  assert.equal(f.doc.querySelector('#cards [data-key="grok-1"] [data-act="enable"]').checked,true);
+  assert.equal(f.calls.some(c=>c[0]==="active"||c[0]==="grok-active"),false);
+  assert.equal(f.doc.querySelector("#cards").classList.contains("cols-2"),true);
+});
+
+test("ChatGPT settings handles share card order and persist separately from Grok",async(t)=>{
+  const f=await fixture(t);f.config.accountOrder=["grok-1"];
+  f.chat.accounts.push({...f.chat.accounts[0],entryKey:"chatgpt:second",title:"第二Codex",enabled:false});
+  f.click("provider-chatgpt");await until(()=>f.doc.querySelectorAll("#cards .acc-card").length===2);
+  dragEvent(f,f.doc.querySelector('#account-list [data-key="chatgpt:local"] [data-drag-handle]'),"dragstart");
+  dragEvent(f,f.doc.querySelector('#account-list [data-key="chatgpt:second"]'),"drop");
+  assert.deepEqual(cardKeys(f),["chatgpt:second","chatgpt:local"]);
+  await until(()=>f.calls.some(c=>c[0]==="chat-reorder"));
+  assert.deepEqual(f.config.chatgptAccountOrder,["chatgpt:second","chatgpt:local"]);
+  assert.deepEqual(f.config.accountOrder,["grok-1"]);
+  f.events.onUsageResult(f.chat);
+  assert.deepEqual(cardKeys(f),["chatgpt:second","chatgpt:local"]);
+  f.click("provider-grok");await until(()=>f.doc.querySelector(".grok-mark"));
+  f.click("provider-chatgpt");
+  assert.deepEqual(cardKeys(f),["chatgpt:second","chatgpt:local"]);
+});
+
+test("drag started under another provider cannot reorder the destination provider",async(t)=>{
+  const f=await fixture(t);
+  dragEvent(f,f.doc.querySelector("#cards [data-drag-handle]"),"dragstart");
+  f.click("provider-chatgpt");await until(()=>f.doc.querySelector(".avatar.chatgpt"));
+  dragEvent(f,f.doc.querySelector("#cards .acc-card"),"drop");
+  assert.equal(f.calls.some(c=>c[0].endsWith("reorder")),false);
+});
+
+test("failed card order save restores known order and keeps account actions untouched",async(t)=>{
+  const f=await fixture(t);
+  f.grok.accounts.push({...f.grok.accounts[0],entryKey:"grok-2",title:"第二账号",enabled:false});
+  f.events.onAccountsChanged();await until(()=>f.doc.querySelectorAll(".acc-row").length===2);
+  f.events.onUsageResult(f.grok);
+  f.base.reorderAccounts=async()=>{throw new Error("模拟排序保存失败");};
+  // The wrapper routes through the live preload object rather than retaining a stale method.
+  dragEvent(f,f.doc.querySelector('#cards [data-key="grok-1"] [data-drag-handle]'),"dragstart");
+  dragEvent(f,f.doc.querySelector('#cards [data-key="grok-2"]'),"drop");
+  await until(()=>!f.doc.getElementById("operation-message").hidden);
+  await until(()=>cardKeys(f)[0]==="grok-1");
+  assert.deepEqual(cardKeys(f),["grok-1","grok-2"]);
+  assert.equal(f.calls.some(c=>c[0]==="active"||c[0]==="grok-active"),false);
+});
+
+test("cards stay two-column on wide panels with a single-column narrow fallback",()=>{
+  const css=fs.readFileSync(path.join(__dirname,"..","src/styles.css"),"utf8");
+  assert.match(css,/\.cards-grid\.cols-2\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css,/@media\s*\(max-width:\s*719px\)[\s\S]*?\.cards-grid\.cols-2\s*\{\s*grid-template-columns:\s*1fr/);
+  assert.doesNotMatch(css,/cols-3|repeat\(3,|auto-fill/);
+});
 
 test("preserves old Grok card, proxy settings and CLIProxy controls", async(t)=>{
   const f=await fixture(t);
@@ -57,6 +134,8 @@ test("adds ChatGPT in the exact existing card classes without xAI-only metrics",
   await until(()=>f.doc.querySelector(".card-title")?.textContent==="本机 Codex");
   assert.equal(f.doc.getElementById("provider-chatgpt").getAttribute("aria-selected"),"true");
   const card=f.doc.querySelector(".acc-card");
+  assert.equal(card.querySelector(".head-row .chatgpt-plan").textContent,"Plus");
+  assert.match(card.textContent,/5h限额/);assert.doesNotMatch(card.textContent,/会话限额/);
   assert.match(card.textContent,/OpenAI/);assert.match(card.textContent,/使用重置卡/);assert.match(card.textContent,/周限额/);
   assert.doesNotMatch(card.textContent,/Build 用量|API 月额度|按量付费/);
   assert.ok(card.querySelector('[data-act="delete"]'));
@@ -74,6 +153,54 @@ test("switching back restores Grok and ignores delayed results from other provid
   assert.equal(f.doc.querySelector('[data-path="cliAuth"]').hidden,false);
   assert.match(f.doc.getElementById("cli-sync-note").textContent,/同步会覆盖/);
   assert.match(f.doc.getElementById("cli-auth-hint").textContent,/grok login/);
+});
+
+test("provider switch uses loading, not empty state, and cached cards return synchronously",async(t)=>{
+  const f=await fixture(t);let finishList,finishRefresh;
+  const list=f.base.chatgptList;
+  f.base.chatgptList=()=>new Promise(resolve=>{finishList=()=>list().then(resolve);});
+  f.base.chatgptRefresh=()=>new Promise(resolve=>{finishRefresh=resolve;});
+  f.click("provider-chatgpt");
+  assert.equal(f.doc.getElementById("empty-state").hidden,true);
+  assert.equal(f.doc.getElementById("accounts-loading").hidden,false);
+  await until(()=>finishList);finishList();
+  await until(()=>f.doc.querySelector(".avatar.chatgpt"));
+  assert.equal(f.doc.getElementById("empty-state").hidden,true);
+  await until(()=>finishRefresh);
+  f.click("provider-grok");
+  assert.equal(f.doc.querySelector(".card-title").textContent,"原有 Grok 账号");
+  f.click("provider-chatgpt");
+  assert.ok(f.doc.querySelector(".avatar.chatgpt"));
+  assert.equal(f.doc.getElementById("empty-state").hidden,true);
+  f.base.chatgptList=list;
+  finishList?.();finishRefresh(f.chat);
+});
+
+test("full email preference updates card and settings list, and masks cached cards immediately",async(t)=>{
+  const f=await fixture(t);
+  const email="long-account-name-for-privacy-test@example.com";
+  const display=()=>{
+    f.chat.accounts.forEach(a=>{a.emailDisplay=f.config.showFullEmails?email:a.emailMasked;});
+    return f.chat.accounts;
+  };
+  f.base.chatgptList=async()=>display();
+  f.base.chatgptRefresh=async()=>{display();f.events.onUsageResult(f.chat);return f.chat;};
+  f.click("provider-chatgpt");await until(()=>f.doc.querySelector(".avatar.chatgpt"));
+  const control=f.doc.getElementById("set-full-emails");
+  assert.equal(control.checked,false);
+  assert.equal(f.doc.querySelector(".card-title").textContent,"te***@example.com");
+  f.click("set-full-emails");
+  await until(()=>f.doc.querySelector(".card-title").textContent===email&&!control.disabled);
+  assert.equal(f.doc.querySelector(".acc-row .name").textContent,email);
+  assert.ok(f.doc.querySelector(".acc-row .name.email-full"));
+  f.click("provider-grok");await until(()=>f.doc.querySelector(".grok-mark"));
+  f.click("set-full-emails");
+  f.click("provider-chatgpt");
+  assert.equal(f.doc.querySelector(".card-title").textContent,"te***@example.com");
+  assert.doesNotMatch(f.doc.getElementById("cards").textContent,/long-account-name/);
+  await until(()=>!control.disabled);
+  assert.equal(f.doc.querySelector(".card-title").textContent,"te***@example.com");
+  assert.equal(f.doc.querySelector(".acc-row .name").textContent,"te***@example.com");
 });
 
 test("ChatGPT scan/file/paste controls route to Codex imports",async(t)=>{
