@@ -85,7 +85,7 @@ function panelSize(cfg = settings.load(), display = panelDisplay()) {
 }
 
 function syncPanelSize() {
-  if (!panel || panel.isDestroyed() || isFullscreen) return;
+  if (!panel || panel.isDestroyed() || isFullscreen || userResizePending) return;
   try {
     const display = panelDisplay(true);
     const cfg = settings.load();

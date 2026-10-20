@@ -392,6 +392,18 @@ test("only native will-resize transitions auto to manual and preserves the chose
   assert.equal(f.panel.getBounds().width,630);assert.equal(f.cfg.panelWidth,630);
 });
 
+test("background refresh cannot snap the window while an interactive resize is in progress", async () => {
+  const f=fixture({panelWidth:860});
+  f.panel.emit("will-resize");
+  f.panel.bounds.width=615;
+  await f.invoke("refresh-usage");
+  assert.equal(f.panel.getBounds().width,615);
+  assert.equal(f.cfg.panelWidthMode,"auto");
+  f.panel.emit("resized");
+  assert.equal(f.cfg.panelWidthMode,"manual");
+  assert.equal(f.cfg.panelWidth,615);
+});
+
 test("manual mode selection freezes visible size instead of reverting to the old default", async () => {
   const f=fixture({panelWidth:860},{grok:[{entryKey:"grok:a"}]});
   await f.invoke("update-settings",{panelWidthMode:"manual"});
