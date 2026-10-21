@@ -42,6 +42,10 @@
         </div>
       </header>
 
+      <div class="provider-tabs no-drag" role="tablist" aria-label="用量提供商">
+        <button type="button" class="provider-tab active" id="provider-grok" role="tab" aria-selected="true">Grok</button>
+        <button type="button" class="provider-tab" id="provider-chatgpt" role="tab" aria-selected="false">ChatGPT / Codex</button>
+      </div>
       <div class="body-row">
         <nav class="side-nav" id="side-nav" hidden>
           <button type="button" class="nav-item active" data-view="home">账号总览</button>
@@ -53,8 +57,8 @@
           <!-- Login -->
           <section id="view-login" class="view" hidden>
             <div class="card login-card">
-              <h2>添加 / 重新登录账号</h2>
-              <p class="muted">
+              <h2 id="login-heading">添加 / 重新登录账号</h2>
+              <p class="muted" id="login-intro">
                 <strong>应用内浏览器授权</strong>（device-code）：点「开始登录」→ 用复制的链接在浏览器完成 xAI 授权。
                 仅在 grok.com 网页登录<strong>不会</strong>自动进本应用。
               </p>
@@ -67,7 +71,7 @@
                 </p>
                 <div class="cliproxy-box">
                   <h3>从 Cliproxy 导入</h3>
-                  <p class="muted sm">
+                  <p class="muted sm" id="import-help">
                     解析 CLIProxyAPI 账号 JSON（<code>xai-邮箱.json</code>，含 access_token / refresh_token），导入后可查用量。
                   </p>
                   <div class="row gap wrap">
@@ -108,6 +112,8 @@
 
           <!-- Home / cards -->
           <section id="view-home" class="view">
+            <p id="operation-message" class="reset-feedback" role="status" hidden></p>
+            <p id="accounts-loading" class="muted" role="status" hidden>正在加载账号…</p>
             <div class="home-toolbar" id="home-toolbar" hidden>
               <div class="home-toolbar-meta" id="home-toolbar-meta"></div>
               <div class="home-toolbar-actions">
@@ -164,8 +170,29 @@
                 </label>
                 <label class="check">
                   <input type="checkbox" id="set-tray-pct" checked />
-                  <span>托盘显示周限百分比</span>
+                  <span>托盘显示额度百分比</span>
                 </label>
+                <p class="muted sm">Codex 分别显示 5h / 月限和周限；悬停图标查看周期及额度。</p>
+                <label class="field">
+                  <span>额度显示</span>
+                  <select id="set-quota-display">
+                    <option value="used">显示已用额度</option>
+                    <option value="remaining">显示剩余额度</option>
+                  </select>
+                </label>
+                <p class="muted sm">适用于 5h、月限、周限和托盘百分比；重置时间不变。</p>
+                <label class="field">
+                  <span>窗口宽度</span>
+                  <select id="set-panel-width-mode">
+                    <option value="auto">自动紧凑（单账号窄窗 / 多账号双列）</option>
+                    <option value="manual">手动调整（保持当前宽度）</option>
+                  </select>
+                </label>
+                <label class="check">
+                  <input type="checkbox" id="set-full-emails" />
+                  <span>显示完整账号邮箱（ChatGPT / Codex）</span>
+                </label>
+                <p class="muted sm">仅本界面展示；默认隐藏，截图或共享屏幕时请注意隐私。</p>
 
                 <h3 class="mt">网络代理</h3>
                 <label class="field">
@@ -216,14 +243,15 @@
                   <button type="button" class="btn sm" id="btn-settings-cliproxy-scan">扫描 Cliproxy</button>
                   <button type="button" class="btn sm" id="btn-settings-cliproxy-file">导入 Cliproxy JSON</button>
                 </div>
-                <p class="muted sm">
+                <p class="muted sm" id="cli-sync-note">
                   同步会覆盖同账号的 access / refresh token（本地重新 login 后点此即可，不必浏览器再登）。
                 </p>
                 <p class="muted sm" id="about-version">OpenUsage Grok</p>
-                <p class="muted sm note">
+                <p class="muted sm note" id="grok-note">
                   说明：xAI 不返回 SuperGrok 订阅日历到期日，请用手动粘贴续费信息。部分账号 chat 可能 403（JWT
                   tier=1）。
                 </p>
+                <p class="muted sm" id="chatgpt-import-note" hidden>ChatGPT 凭据独立 DPAPI 加密，不改写 Codex / CLIProxy 原文件。到期后重新导入最新 JSON；本机账号删除后可通过“同步本机 Codex”恢复。</p>
                 <div class="row gap" style="margin-top: 16px; margin-bottom: 8px; flex-wrap: wrap">
                   <button type="button" class="btn primary" id="btn-settings-home">退出设置</button>
                 </div>

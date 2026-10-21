@@ -1,6 +1,6 @@
 # OpenUsage Grok
 
-Windows 托盘应用：仅监控 **Grok / SuperGrok** 多账号用量。
+Windows 托盘应用：监控 **Grok / SuperGrok** 和 **ChatGPT / Codex** 多账号用量。保留 Grok 原版卡片、托盘及代理设置，通过顶部标签切换服务。
 
 [![Build Windows](https://github.com/chenzai666/openusage-grok/actions/workflows/build.yml/badge.svg)](https://github.com/chenzai666/openusage-grok/actions/workflows/build.yml)
 
@@ -15,11 +15,34 @@ Windows 托盘应用：仅监控 **Grok / SuperGrok** 多账号用量。
 - 启动/刷新自动同步 `~/.grok/auth.json`（只读合并，不覆盖 CLI；解密失败可从 CLI 重建）
 - 设置页：代理、同步 CLI、退出设置回总览
 - 手动粘贴续费文案（`Renews on … · billed via …`）
+- ChatGPT / Codex：CLIProxy 扫描、选择文件或目录、粘贴 JSON，以及只读同步本机 Codex OAuth 登录
+- ChatGPT 卡片：醒目套餐标识、5h 限额、周限额、其他模型限额、重置时间和可用重置卡
+- 设置可选择显示完整 ChatGPT 账号邮箱，默认打码；提供商切换优先使用已有卡片缓存，后台刷新
+- 默认按账号数量自动收窄：单账号约 400px，多账号约 720px 双列；切换服务同步调整，单卡不再横向拉满
+- 设置可切换自动紧凑 / 手动宽度，手动拖动窗口边缘后保留自定义大小；拖动卡片手柄可排序，Grok 与 ChatGPT 分别保存顺序
+- 设置支持“显示已用额度 / 显示剩余额度”，5h、周限百分比及进度条和托盘同步切换；只调整展示，不改变额度、状态或重置时间
+- Free 的 30 天窗口显示为“月限额”，不再换算成 720h；付费套餐的 5h / 周限标签保持不变
+- Codex 托盘分别显示主窗口（5h / 月限）与周限数字；只有月限的账号显示单个月限图标，Grok 保持单个周限图标
+- 删除本机卡片后保持隐藏，可在设置中手动同步恢复；不删除或修改 CLI 的 `auth.json`
+- 重置卡需要原生确认；请求结果未知时保留幂等编号，后续核对复用同一编号
+
+## ChatGPT / Codex 使用
+
+1. 切换到顶部 **ChatGPT / Codex**，点击 CLIProxy 导入或进入设置选择扫描、文件、目录、粘贴。
+2. CLIProxy 导出需要 Codex / ChatGPT OAuth 的 `access_token`。仅 API Key 登录没有订阅额度，不会自动生成本机卡片。
+3. Grok 与 ChatGPT 共用设置页的代理模式，支持自动、自定义、环境变量、系统和直连；升级保留已有设置。
+4. 在卡片菜单中删除账号，只清理本程序的副本。本机卡片可以通过“同步本机 Codex”恢复。
+5. 点击可用重置卡后，核对原生对话框中的账号和数量再确认。没有可重置额度时，服务端可能返回“无需重置”。
+
+CLIProxy 导入为只读凭据快照，不使用或轮换源账号的 `refresh_token`。访问令牌过期后，请让原 CLIProxy / Codex 完成刷新，再重新导入或同步。程序不修改源凭据文件。
+
+混合 auth 目录按服务识别账号：Grok 导入拒绝明确属于 Codex 或其他服务的文件及令牌发行方，避免把 ChatGPT 凭据混入 xAI 账号库。
 
 ## 开发
 
 ```bash
 npm install
+npm test
 npm start
 ```
 
@@ -45,14 +68,13 @@ npm run release   # dist + 复制到 Desktop\OpenUsage-releases\
 ## GitHub 发布
 
 1. 确保 `package.json` 的 `version` 正确  
-2. 推送标签触发构建与 Release：
+2. 使用 `gh` 创建标签触发构建与 Release：
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+gh api repos/chenzai666/openusage-grok/git/refs -f ref=refs/tags/v0.1.23 -f sha="$(git rev-parse HEAD)"
 ```
 
-也可在 Actions 里手动 `workflow_dispatch`。
+也可在 Actions 里手动 `workflow_dispatch`。PR 会先测试再构建安装包，不创建正式 Release。
 
 ## 数据目录
 
@@ -61,12 +83,15 @@ git push origin v0.1.1
 | 文件 | 说明 |
 |------|------|
 | `accounts.json` | 多账号（DPAPI envelope） |
+| `chatgpt-accounts.json` | ChatGPT 独立 DPAPI 加密凭据、本机隐藏标记、待核对重置编号 |
 | `config.json` | 主题、刷新、代理等 |
 | `debug\billing-last.json` | 最近一次账单（已打码） |
 
+更新前备份此数据目录。ChatGPT 凭据仅在系统加密可用时保存，不降级写入明文；损坏的凭据文件会保留并报错。备份仍含敏感信息，应限制访问。
+
 ## 技术栈
 
-Electron 33 · 原生 HTML/CSS/JS · 无 React
+Electron 44 · 原生 HTML/CSS/JS · 无 React
 
 ## License
 

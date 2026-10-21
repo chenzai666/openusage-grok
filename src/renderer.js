@@ -4,15 +4,112 @@
   const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 
   const state = {
+    provider: "grok",
     view: "home",
     usage: null,
     accounts: [],
     settings: null,
     fullscreen: false,
     loginInfo: null,
-    dragKey: null,
     reauthKey: null,
+    resetBusy: false,
+    providerRevision: 0,
+    providerCache: {},
+    accountsLoading: true,
+    dragAccount: null,
   };
+
+  const base = window.openusage;
+  const isChatgpt = () => state.provider === "chatgpt";
+  const safeImport = (mode, value) => base.chatgptImport(mode, value).catch((e) => ({ error: e.message || String(e) }));
+  const openusage = {
+    ...base,
+    getStatus: async () => {
+      const chat = isChatgpt();
+      const status = await base.getStatus();
+      return { ...status, lastUsage: chat ? status.chatgptLastUsage : status.lastUsage };
+    },
+    listAccounts: () => isChatgpt() ? base.chatgptList() : base.listAccounts(),
+    refreshUsage: (opts) => isChatgpt() ? base.chatgptRefresh() : base.refreshUsage(opts),
+    removeAccount: (key) => isChatgpt() ? base.chatgptRemove(key) : base.removeAccount(key),
+    setActiveAccount: (key) => isChatgpt() ? base.chatgptActive(key) : base.setActiveAccount(key),
+    reorderAccounts: (keys) => isChatgpt() ? base.chatgptReorder(keys) : base.reorderAccounts(keys),
+    testAccountApi: (key) => isChatgpt() ? base.chatgptRefresh() : base.testAccountApi(key),
+    testAllApis: () => isChatgpt() ? base.chatgptRefresh() : base.testAllApis(),
+    logoutAll: () => isChatgpt() ? base.chatgptClear() : base.logoutAll(),
+    softImportCli: (opts) => isChatgpt() ? safeImport("local", opts) : base.softImportCli(opts),
+    cliproxyScanDefault: () => isChatgpt() ? safeImport("scan") : base.cliproxyScanDefault(),
+    cliproxyImportText: (text) => isChatgpt() ? safeImport("text", text) : base.cliproxyImportText(text),
+    cliproxyPickImport: () => isChatgpt() ? safeImport("files") : base.cliproxyPickImport(),
+    cliproxyPickFolder: () => isChatgpt() ? safeImport("folder") : base.cliproxyPickFolder(),
+  };
+
+  function orderField() { return isChatgpt() ? "chatgptAccountOrder" : "accountOrder"; }
+
+  function orderedAccounts(accounts) {
+    const configured = state.settings?.[orderField()];
+    const order = Array.isArray(configured) ? configured : [];
+    const rank = new Map(order.map((key, index) => [key, index]));
+    return [...accounts].sort((a, b) => (rank.get(a.entryKey) ?? order.length) - (rank.get(b.entryKey) ?? order.length));
+  }
+
+  function updateProviderUi() {
+    const chat = isChatgpt();
+    $("#provider-grok").classList.toggle("active", !chat);
+    $("#provider-chatgpt").classList.toggle("active", chat);
+    $("#provider-grok").setAttribute("aria-selected", String(!chat));
+    $("#provider-chatgpt").setAttribute("aria-selected", String(chat));
+    $("#provider-grok").disabled = state.resetBusy;
+    $("#provider-chatgpt").disabled = state.resetBusy;
+    $("#login-heading").textContent = chat ? "添加 ChatGPT / Codex 账号" : "添加 / 重新登录账号";
+    $("#login-intro").hidden = chat;
+    $("#btn-start-login").hidden = chat;
+    $("#btn-import-cli").textContent = chat ? "同步本机 Codex" : "同步本地 Grok CLI";
+    $("#btn-settings-import-cli").textContent = chat ? "同步本机 Codex" : "同步 Grok CLI";
+    $("#import-help").textContent = chat ? "导入 CLIProxy 的 Codex OAuth JSON（单文件、多文件、目录或数组）。API Key 不提供 ChatGPT 订阅额度。" : "解析 CLIProxyAPI 的 xAI 账号 JSON（xai-邮箱.json），导入后可查用量。";
+    $("#cliproxy-paste").placeholder = chat ? '{"type":"codex","access_token":"...","account_id":"..."}' : '{"type":"xai","access_token":"...","email":"..."}';
+    $("#chatgpt-import-note").hidden = !chat;
+    $("#grok-note").hidden = chat;
+    $('[data-path="cliAuth"]').hidden = chat;
+    $("#cli-sync-note").textContent = chat
+      ? "仅读取并保存 access token 快照，不使用 refresh token，不刷新或改写 Codex / CLIProxy 源凭据；过期后请重新同步或导入。"
+      : "同步会覆盖同账号的 access / refresh token（本地重新 login 后点此即可，不必浏览器再登）。";
+    $("#btn-test-all").title = chat ? "刷新 ChatGPT 全部账号" : "一键测试全部";
+    $("#btn-home-test").textContent = chat ? "查询全部额度" : "一键测试全部";
+    $("#btn-settings-test-all").textContent = chat ? "查询额度" : "一键测试";
+    if (chat) $("#cli-auth-hint").textContent = "本机 Codex 只读同步 access token，不使用 refresh token，也不修改登录文件；从面板删除后不会自动加回，可在这里恢复。";
+    else $("#cli-auth-hint").textContent = "本地 grok login 后点「同步 Grok CLI」即可拉取最新令牌，无需浏览器再登录。";
+  }
+
+  async function switchProvider(provider) {
+    if (provider === state.provider || state.resetBusy) return;
+    const revision = ++state.providerRevision;
+    state.dragAccount = null;
+    state.providerCache[state.provider] = { usage: state.usage, accounts: state.accounts, loaded: !state.accountsLoading };
+    const cached = state.providerCache[provider];
+    state.provider = provider; state.usage = cached?.usage || null; state.accounts = cached?.accounts || [];
+    state.accountsLoading = !cached?.loaded;
+    $("#operation-message").hidden = true;
+    $("#accounts-loading").textContent = "正在加载账号…";
+    $("#cliproxy-paste").value = "";
+    updateProviderUi(); renderCards(); renderAccountList(); setView("home");
+    try {
+      await base.updateSettings({ selectedProvider: provider });
+      if (revision !== state.providerRevision) return;
+      await reloadSettings();
+      if (revision !== state.providerRevision) return;
+      await reloadAccounts();
+      if (revision !== state.providerRevision) return;
+      await openusage.refreshUsage();
+    } catch (e) {
+      if (revision !== state.providerRevision) return;
+      if (state.accountsLoading) $("#accounts-loading").textContent = "账号加载失败，请重新切换后重试。";
+      $("#operation-message").textContent = e.message || String(e); $("#operation-message").hidden = false;
+    }
+  }
+
+  $("#provider-grok").addEventListener("click", () => switchProvider("grok"));
+  $("#provider-chatgpt").addEventListener("click", () => switchProvider("chatgpt"));
 
   function esc(s) {
     return String(s ?? "")
@@ -46,7 +143,19 @@
     return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
-  function healthDotsHtml(percent) {
+  function quotaPercent(usedPercent) {
+    if (!Number.isFinite(usedPercent)) return null;
+    const used = Math.max(0, Math.min(100, usedPercent));
+    return state.settings?.quotaDisplay === "remaining" ? 100 - used : used;
+  }
+
+  function quotaText(usedPercent) {
+    const percent = quotaPercent(usedPercent);
+    const label = state.settings?.quotaDisplay === "remaining" ? "剩余" : "已用";
+    return percent == null ? "暂无额度数据" : `${label} ${Math.round(percent)}%`;
+  }
+
+  function healthDotsHtml(percent, period = "周限") {
     const total = 18;
     const pct =
       percent == null || !Number.isFinite(percent)
@@ -59,9 +168,9 @@
     for (let i = 0; i < total; i++) {
       dots += `<span class="${i < filled ? "on" : ""}"></span>`;
     }
-    const label = pct == null ? "—" : Math.round(pct) + "%";
-    return `<div class="health">
-      <span class="health-label">健康状态（周限）</span>
+    const label = pct == null ? "—" : quotaText(pct);
+    return `<div class="health" title="健康点阵表示${esc(period)}剩余额度">
+      <span class="health-label">健康状态（${esc(period)}）</span>
       <div class="health-dots">${dots}</div>
       <span class="health-pct">${esc(label)}</span>
     </div>`;
@@ -139,12 +248,13 @@
   }
 
   function renderCard(acc) {
+    if (acc.provider === "chatgpt") return renderChatgptCard(acc);
     const tags = (acc.labels || [])
       .map((t) => `<span class="badge tag">${esc(t)}</span>`)
       .join("");
     const weeklyVal =
-      acc.weeklyPercent != null
-        ? `已用 ${Math.round(acc.weeklyPercent)}%` +
+      Number.isFinite(acc.weeklyPercent)
+        ? quotaText(acc.weeklyPercent) +
           (acc.weeklyReset ? ` · 重置 ${acc.weeklyReset}` : "")
         : "无周额度数据";
     const buildVal =
@@ -180,9 +290,10 @@
         </div></div>`
       : "";
 
-    return `<article class="acc-card" data-key="${esc(acc.entryKey)}">
+    return `<article class="acc-card" data-key="${esc(acc.entryKey)}" draggable="true">
       <div class="card-body">
         <div class="card-head">
+          <span class="drag-handle" data-drag-handle draggable="true" title="拖动调整账号顺序" aria-label="拖动调整账号顺序">⠿</span>
           <input type="checkbox" class="tray-check" data-act="enable" title="设为托盘账号" ${acc.enabled ? "checked" : ""} />
           ${avatarMark()}
           <div class="head-main">
@@ -202,7 +313,7 @@
       </div>
       <div class="card-metrics">
         ${healthDotsHtml(acc.weeklyPercent)}
-        ${metric("周限额", weeklyVal, acc.weeklyPercent, acc.weeklyPercent == null)}
+        ${metric("周限额", weeklyVal, quotaPercent(acc.weeklyPercent), !Number.isFinite(acc.weeklyPercent))}
         ${metric("Build 用量", buildVal, acc.buildPercent, acc.buildPercent == null)}
         ${metric("API 月额度", apiVal, acc.apiPercent, acc.apiPercent == null)}
         ${metric("按量已用", onDemand, null, true)}
@@ -230,8 +341,35 @@
     </article>`;
   }
 
+  function renderChatgptCard(acc) {
+    const plan = String(acc.planName || "ChatGPT / Codex").replace(/\b(team|plus|pro|business|enterprise|free|edu)\b/gi, (s) => s[0].toUpperCase() + s.slice(1).toLowerCase());
+    const email = acc.emailDisplay || acc.title || acc.emailMasked || "ChatGPT 账号";
+    const monthly = !Number.isFinite(acc.weeklyPercent) && (acc.metrics || []).find((m) => m.label === "月限额");
+    const metrics = (acc.metrics || []).map((m) => metric(m.label, quotaText(m.percent) + (m.resetAt ? " · 重置 " + formatTime(m.resetAt) : ""), quotaPercent(m.percent), !Number.isFinite(m.percent))).join("");
+    return `<article class="acc-card" data-key="${esc(acc.entryKey)}" draggable="true">
+      <div class="card-body"><div class="card-head">
+        <span class="drag-handle" data-drag-handle draggable="true" title="拖动调整账号顺序" aria-label="拖动调整账号顺序">⠿</span>
+        <input type="checkbox" class="tray-check" data-act="enable" title="设为托盘账号" ${acc.enabled ? "checked" : ""} />
+        <div class="avatar chatgpt" aria-hidden="true"><img src="../assets/chatgpt.svg" width="25" height="25" alt="" /></div>
+        <div class="head-main"><div class="head-row"><span class="badge xai">OpenAI</span><span class="badge chatgpt-plan" aria-label="套餐：${esc(plan)}">${esc(plan)}</span><span class="badge ${statusClass(acc.status)}">${esc(acc.status || "待刷新")}</span></div>
+          <div class="card-title ${state.settings?.showFullEmails ? "chatgpt-email" : ""}">${esc(email)}</div></div>
+      </div><div class="plan-line">${esc(acc.source || "ChatGPT / Codex")}${acc.refreshedAt ? " · 刷新 " + esc(acc.refreshedAt) : ""}</div>
+      ${acc.error ? `<div class="unified-note"><span class="uni-ico">ⓘ</span><span>${esc(acc.error)}</span></div>` : ""}</div>
+      <div class="card-metrics">${monthly ? healthDotsHtml(monthly.percent, "月限") : healthDotsHtml(acc.weeklyPercent)}
+        <div class="reset-row"><span>额度重置卡 <strong>${acc.resetCount == null ? "待查询" : esc(acc.resetCount) + " 张"}</strong></span>
+          <button type="button" class="btn sm" data-act="reset-credit" ${state.resetBusy || (acc.resetCount === 0 && !acc.pendingReset) || acc.error ? "disabled" : ""}>${acc.pendingReset ? "核对重置结果" : acc.resetCount === 0 ? "无可用重置卡" : "使用重置卡"}</button></div>
+        ${metrics || '<p class="muted sm">暂无额度数据，请导入有效 OAuth 账号后刷新。</p>'}
+        ${acc.creditsText != null ? metric("额外积分", acc.creditsText, null, false) : ""}
+      </div><div class="card-actions">
+        <button type="button" class="act-btn wide" data-act="test" title="刷新额度"><span class="ico">↻</span> 刷新</button>
+        <button type="button" class="act-btn" data-act="edit" title="账号设置">⚙</button>
+        <button type="button" class="act-btn danger" data-act="delete" title="从面板移除，不修改源文件">🗑</button>
+        <span class="spacer"></span><label class="toggle" title="设为托盘账号"><span>启用</span><input type="checkbox" data-act="enable" ${acc.enabled ? "checked" : ""} /></label>
+      </div></article>`;
+  }
+
   function renderHomeToolbar() {
-    const list = state.usage?.accounts || [];
+    const list = orderedAccounts(state.usage?.accounts || []);
     const bar = $("#home-toolbar");
     if (!list.length) {
       bar.hidden = true;
@@ -253,12 +391,14 @@
   }
 
   function renderCards() {
-    const list = state.usage?.accounts || [];
+    const list = orderedAccounts(state.usage?.accounts || []);
+    $("#view-home").classList.toggle("single-account", list.length <= 1);
     const empty = $("#empty-state");
     const grid = $("#cards");
+    $("#accounts-loading").hidden = !state.accountsLoading || list.length > 0;
     renderHomeToolbar();
     if (!list.length) {
-      empty.hidden = false;
+      empty.hidden = state.accountsLoading;
       grid.innerHTML = "";
       grid.className = "cards-grid";
       return;
@@ -266,75 +406,112 @@
     empty.hidden = true;
     grid.className =
       "cards-grid" +
-      (list.length >= 3 ? " cols-3" : list.length >= 2 ? " cols-2" : "");
+      (list.length >= 2 ? " cols-2" : "");
     grid.innerHTML = list.map(renderCard).join("");
+    bindDrag(grid, ".acc-card");
   }
 
   function renderAccountList() {
     const host = $("#account-list");
-    const list = state.accounts || [];
+    const list = orderedAccounts(state.accounts || []);
     if (!list.length) {
-      host.innerHTML = `<p class="muted">暂无账号。可添加或从 Grok CLI 导入。</p>`;
+      host.innerHTML = `<p class="muted">暂无账号。可添加或从 ${isChatgpt() ? "Codex / CLIProxy" : "Grok CLI"} 导入。</p>`;
       return;
     }
     host.innerHTML = list
       .map(
         (a) => `<div class="acc-row" draggable="true" data-key="${esc(a.entryKey)}">
-        <span class="handle" title="拖拽排序">⠿</span>
+        <span class="handle drag-handle" data-drag-handle draggable="true" title="拖动调整账号顺序" aria-label="拖动调整账号顺序">⠿</span>
         <div class="info">
-          <div class="name">${esc(a.labels?.[0] || a.emailMasked || "未命名")}</div>
-          <div class="sub">${esc(a.emailMasked || "")}${a.subscription ? " · " + esc(a.subscription) : ""}</div>
+          <div class="name ${isChatgpt() && state.settings?.showFullEmails ? "email-full" : ""}">${esc(a.emailDisplay || a.labels?.[0] || a.emailMasked || "未命名")}</div>
+          <div class="sub ${isChatgpt() && state.settings?.showFullEmails ? "email-full" : ""}">${esc(a.emailDisplay || a.emailMasked || "")}${a.subscription ? " · " + esc(a.subscription) : ""}</div>
           <div class="tags">${(a.labels || []).map((t) => `<span class="badge tag">${esc(t)}</span>`).join("")}</div>
         </div>
-        <button type="button" class="btn sm" data-act="edit-acc">编辑</button>
+        ${isChatgpt() ? "" : '<button type="button" class="btn sm" data-act="edit-acc">编辑</button>'}
         <button type="button" class="btn sm danger" data-act="del-acc">删除</button>
       </div>`
       )
       .join("");
-    bindDrag();
+    bindDrag(host, ".acc-row");
   }
 
-  function bindDrag() {
-    const rows = $$(".acc-row");
+  function bindDrag(host, selector) {
+    const rows = $$(selector, host);
     rows.forEach((row) => {
       row.addEventListener("dragstart", (e) => {
-        // only from handle or name
-        state.dragKey = row.dataset.key;
+        // Only the explicit handle starts a drag; form controls keep their native actions.
+        if (!e.target.closest("[data-drag-handle]") || state.resetBusy) { e.preventDefault(); return; }
+        state.dragAccount = { key: row.dataset.key, provider: state.provider, revision: state.providerRevision };
         row.classList.add("dragging");
         e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("application/x-openusage-account", JSON.stringify(state.dragAccount));
       });
       row.addEventListener("dragend", () => {
         row.classList.remove("dragging");
-        state.dragKey = null;
-        $$(".drop-line").forEach((n) => n.remove());
+        state.dragAccount = null;
+        $$(".drag-over").forEach((n) => n.classList.remove("drag-over"));
       });
       row.addEventListener("dragover", (e) => {
+        const drag = state.dragAccount;
+        if (!drag || drag.provider !== state.provider || drag.revision !== state.providerRevision) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
+        row.classList.add("drag-over");
       });
+      row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
       row.addEventListener("drop", async (e) => {
         e.preventDefault();
-        const from = state.dragKey;
+        row.classList.remove("drag-over");
+        const drag = state.dragAccount;
+        state.dragAccount = null;
+        if (!drag || drag.provider !== state.provider || drag.revision !== state.providerRevision) return;
+        const from = drag.key;
         const to = row.dataset.key;
         if (!from || !to || from === to) return;
-        const keys = state.accounts.map((a) => a.entryKey);
+        const keys = orderedAccounts(state.accounts).map((a) => a.entryKey);
         const fi = keys.indexOf(from);
         const ti = keys.indexOf(to);
         if (fi < 0 || ti < 0) return;
         keys.splice(fi, 1);
         keys.splice(ti, 0, from);
-        await openusage.reorderAccounts(keys);
-        await reloadAccounts();
-        await openusage.refreshUsage();
+        const field = orderField();
+        const previous = state.settings?.[field];
+        state.settings = { ...state.settings, [field]: keys };
+        state.accounts = orderedAccounts(state.accounts);
+        if (state.usage) state.usage = { ...state.usage, accounts: orderedAccounts(state.usage.accounts) };
+        state.providerCache[state.provider] = { usage: state.usage, accounts: state.accounts, loaded: !state.accountsLoading };
+        renderCards(); renderAccountList();
+        try {
+          const saved = await openusage.reorderAccounts(keys);
+          if (saved === false) throw new Error("账号排序保存失败，请重试");
+        } catch (error) {
+          if (drag.revision !== state.providerRevision) return;
+          state.settings[field] = previous;
+          $("#operation-message").textContent = error.message || String(error);
+          $("#operation-message").hidden = false;
+          await reloadAccounts();
+        }
       });
     });
   }
 
   async function reloadAccounts() {
-    state.accounts = await openusage.listAccounts();
+    const revision = state.providerRevision;
+    const accounts = await openusage.listAccounts();
+    if (revision !== state.providerRevision) return;
+    state.accounts = orderedAccounts(accounts);
+    state.accountsLoading = false;
+    // Render known identities before the background network refresh completes.
+    const previous = new Map((state.usage?.accounts || []).map((a) => [a.entryKey, a]));
+    state.usage = { ...state.usage, provider: state.provider, accounts: state.accounts.map((a) => ({
+      ...previous.get(a.entryKey), ...a, provider: state.provider,
+      title: a.title || a.emailDisplay || previous.get(a.entryKey)?.title || a.emailMasked,
+    })) };
+    state.providerCache[state.provider] = { usage: state.usage, accounts: state.accounts, loaded: true };
     const n = state.accounts.length;
     $("#account-count").textContent = n === 1 ? "1 账号" : `${n} 账号`;
     renderAccountList();
+    renderCards();
   }
 
   function formatProxyStatus(proxy) {
@@ -369,13 +546,22 @@
     }
   }
 
-  async function reloadSettings() {
-    state.settings = await openusage.getSettings();
+  async function reloadSettings({ restoreProvider = false } = {}) {
+    const revision = state.providerRevision;
+    const config = await openusage.getSettings();
+    if (revision !== state.providerRevision) return;
+    state.settings = config;
+    if (restoreProvider) state.provider = config.selectedProvider === "chatgpt" ? "chatgpt" : "grok";
     const st = await openusage.getStatus();
+    if (revision !== state.providerRevision) return;
+    updateProviderUi();
     $("#set-theme").value = state.settings.theme || "system";
     $("#set-refresh").value = String(state.settings.refreshMinutes || 5);
     $("#set-login-item").checked = !!state.settings.launchAtLogin;
     $("#set-tray-pct").checked = state.settings.trayShowPercent !== false;
+    $("#set-quota-display").value = state.settings.quotaDisplay === "remaining" ? "remaining" : "used";
+    $("#set-panel-width-mode").value = state.settings.panelWidthMode === "manual" ? "manual" : "auto";
+    $("#set-full-emails").checked = state.settings.showFullEmails === true;
     $("#set-proxy-mode").value = state.settings.proxyMode || "auto";
     $("#set-proxy-url").value = state.settings.proxyUrl || "";
     $("#set-proxy-bypass").value =
@@ -384,7 +570,9 @@
       ? "账号库：Windows DPAPI (safeStorage) 已加密"
       : "账号库：当前环境未启用加密（明文 envelope）";
     const cli = st.cliAuth || {};
-    if (cli.exists) {
+    if (isChatgpt()) {
+      $("#cli-auth-status").textContent = "Codex 本机登录只读同步；API Key 不能查询订阅额度。";
+    } else if (cli.exists) {
       const emails = Array.isArray(cli.emails) && cli.emails.length ? ` · ${cli.emails.join(", ")}` : "";
       $("#cli-auth-status").textContent =
         `CLI 凭证：已找到 ${cli.count || 0} 个账号${emails}`;
@@ -444,8 +632,16 @@
   }
 
   async function doSyncCli() {
+    const revision = state.providerRevision;
     // force=true: pull ~/.grok/auth.json latest tokens; also re-add if previously deleted
     const r = await openusage.softImportCli({ force: true });
+    if (revision !== state.providerRevision) return r;
+    if (isChatgpt()) {
+      alert(r?.error || "已同步本机 Codex 登录；不会修改源文件。");
+      await reloadAccounts();
+      if (!r?.error) { setView("home"); await openusage.refreshUsage(); }
+      return r;
+    }
     alert(formatSyncResult(r));
     await reloadAccounts();
     await reloadSettings();
@@ -572,7 +768,7 @@
     if (r.error && !(r.added || r.updated)) return `导入失败：${r.error}`;
     let msg =
       `Cliproxy 导入完成\n` +
-      `解析到 ${r.scanned != null ? r.scanned : "?"} 个 xAI 账号` +
+      `解析到 ${r.scanned != null ? r.scanned : "?"} 个 ${isChatgpt() ? "Codex" : "xAI"} 账号` +
       ` · 新增 ${r.added || 0} · 更新 ${r.updated || 0}` +
       (r.restored ? ` · 恢复 ${r.restored}` : "") +
       ` · 库内共 ${r.total != null ? r.total : "?"}`;
@@ -589,11 +785,15 @@
     return msg;
   }
 
-  async function afterCliproxyImport(r) {
+  async function afterCliproxyImport(r, revision) {
+    if (revision !== state.providerRevision) return;
     alert(formatCliproxyResult(r));
     await reloadAccounts();
+    if (revision !== state.providerRevision) return;
     await reloadSettings();
+    if (revision !== state.providerRevision) return;
     if (r && (r.added > 0 || r.updated > 0 || r.restored > 0 || r.total > 0) && !r.error) {
+      $("#cliproxy-paste").value = "";
       setView("home");
     }
   }
@@ -601,32 +801,38 @@
   $("#btn-import-cli").addEventListener("click", () => doSyncCli());
   $("#btn-settings-import-cli").addEventListener("click", () => doSyncCli());
   $("#btn-cliproxy-scan").addEventListener("click", async () => {
+    const revision = state.providerRevision;
     const r = await openusage.cliproxyScanDefault();
-    await afterCliproxyImport(r);
+    await afterCliproxyImport(r, revision);
   });
   $("#btn-cliproxy-file").addEventListener("click", async () => {
+    const revision = state.providerRevision;
     const r = await openusage.cliproxyPickImport();
     if (!r || r.cancelled) return;
-    await afterCliproxyImport(r);
+    await afterCliproxyImport(r, revision);
   });
   $("#btn-cliproxy-folder").addEventListener("click", async () => {
+    const revision = state.providerRevision;
     const r = await openusage.cliproxyPickFolder();
     if (!r || r.cancelled) return;
-    await afterCliproxyImport(r);
+    await afterCliproxyImport(r, revision);
   });
   $("#btn-cliproxy-paste").addEventListener("click", async () => {
+    const revision = state.providerRevision;
     const text = ($("#cliproxy-paste") && $("#cliproxy-paste").value) || "";
     const r = await openusage.cliproxyImportText(text);
-    await afterCliproxyImport(r);
+    await afterCliproxyImport(r, revision);
   });
   $("#btn-settings-cliproxy-scan").addEventListener("click", async () => {
+    const revision = state.providerRevision;
     const r = await openusage.cliproxyScanDefault();
-    await afterCliproxyImport(r);
+    await afterCliproxyImport(r, revision);
   });
   $("#btn-settings-cliproxy-file").addEventListener("click", async () => {
+    const revision = state.providerRevision;
     const r = await openusage.cliproxyPickImport();
     if (!r || r.cancelled) return;
-    await afterCliproxyImport(r);
+    await afterCliproxyImport(r, revision);
   });
   $("#btn-settings-home").addEventListener("click", () => setView("home"));
 
@@ -650,27 +856,34 @@
       setView("login");
       startLogin();
     } else if (act === "edit") {
+      if (isChatgpt()) { setView("settings"); return; }
       await reloadAccounts();
       openEditModal(key);
     } else if (act === "delete") {
       if (
         !confirm(
           "从本应用删除该账号？\n" +
-            "（不会修改 Grok CLI 的 auth.json）\n" +
-            "删除后后台刷新不会自动加回；本地 grok login 后点「同步 Grok CLI」可重新导入最新令牌。"
+            "（不会修改 Grok / Codex / CLIProxy 源文件）\n" +
+            "删除后不会自动加回，可通过同步本机登录或重新导入恢复。"
         )
       )
         return;
       await openusage.removeAccount(key);
       await reloadAccounts();
-      // usage-result already pushed by main; re-render if needed
-      if (state.usage?.accounts) {
-        state.usage.accounts = state.usage.accounts.filter((a) => a.entryKey !== key);
-        renderCards();
+      // The main process owns card removal; an older completion must not hide a restored account.
+    } else if (act === "reset-credit") {
+      if (state.resetBusy) return;
+      state.resetBusy = true; updateProviderUi(); renderCards();
+      try {
+        const result = await base.chatgptReset(key);
+        $("#operation-message").textContent = result.message;
+        const account = state.usage?.accounts?.find((a) => a.entryKey === key);
+        if (account) account.pendingReset = !!result.pending;
+      } catch (e) {
+        $("#operation-message").textContent = e.message || String(e);
+      } finally {
+        state.resetBusy = false; updateProviderUi(); $("#operation-message").hidden = false; renderCards();
       }
-    } else if (act === "enable") {
-      const on = btn.checked;
-      if (on) await openusage.setActiveAccount(key);
     }
   });
   $("#cards").addEventListener("change", async (e) => {
@@ -727,6 +940,40 @@
   });
 
   // Settings fields
+  $("#set-panel-width-mode").addEventListener("change", async (e) => {
+    const control = e.target;
+    const previous = state.settings?.panelWidthMode === "manual" ? "manual" : "auto";
+    const value = control.value === "manual" ? "manual" : "auto";
+    state.settings = { ...state.settings, panelWidthMode: value };
+    control.disabled = true;
+    try {
+      await openusage.updateSettings({ panelWidthMode: value });
+    } catch (error) {
+      state.settings = { ...state.settings, panelWidthMode: previous };
+      control.value = previous;
+      $("#operation-message").textContent = error.message || String(error);
+      $("#operation-message").hidden = false;
+    } finally { control.disabled = false; }
+  });
+
+  $("#set-quota-display").addEventListener("change", async (e) => {
+    const control = e.target;
+    const previous = state.settings?.quotaDisplay || "used";
+    const value = control.value === "remaining" ? "remaining" : "used";
+    state.settings = { ...state.settings, quotaDisplay: value };
+    renderCards();
+    control.disabled = true;
+    try {
+      await openusage.updateSettings({ quotaDisplay: value });
+    } catch (error) {
+      state.settings = { ...state.settings, quotaDisplay: previous };
+      control.value = previous;
+      renderCards();
+      $("#operation-message").textContent = error.message || String(error);
+      $("#operation-message").hidden = false;
+    } finally { control.disabled = false; }
+  });
+
   $("#set-theme").addEventListener("change", async (e) => {
     await openusage.updateSettings({ theme: e.target.value });
     const st = await openusage.getStatus();
@@ -742,6 +989,38 @@
   });
   $("#set-tray-pct").addEventListener("change", async (e) => {
     await openusage.updateSettings({ trayShowPercent: e.target.checked });
+  });
+  $("#set-full-emails").addEventListener("change", async (e) => {
+    const control = e.target;
+    control.disabled = true;
+    const maskSnapshot = (snapshot) => snapshot && ({ ...snapshot, accounts: snapshot.accounts.map((a) => ({
+      ...a, title: a.emailMasked || "ChatGPT 账号", emailDisplay: a.emailMasked || "ChatGPT 账号",
+    })) });
+    if (!control.checked) {
+      const cache = state.providerCache.chatgpt;
+      if (cache) {
+        cache.usage = maskSnapshot(cache.usage);
+        cache.accounts = maskSnapshot({ accounts: cache.accounts }).accounts;
+      }
+      if (isChatgpt()) {
+        state.usage = maskSnapshot(state.usage);
+        state.accounts = maskSnapshot({ accounts: state.accounts }).accounts;
+        renderCards(); renderAccountList();
+      }
+    }
+    try {
+      await openusage.updateSettings({ showFullEmails: control.checked });
+      state.settings = await openusage.getSettings();
+      await reloadAccounts();
+      // Local display updates must not lock the privacy toggle behind a network request.
+      openusage.refreshUsage().catch((error) => {
+        $("#operation-message").textContent = error.message || String(error);
+        $("#operation-message").hidden = false;
+      });
+    } catch (error) {
+      $("#operation-message").textContent = error.message || String(error);
+      $("#operation-message").hidden = false;
+    } finally { control.disabled = false; }
   });
 
   async function saveProxyFromForm(applyOnly) {
@@ -794,7 +1073,9 @@
 
   // IPC events
   openusage.onUsageResult((data) => {
-    state.usage = data;
+    if ((data.provider || "grok") !== state.provider) return;
+    state.usage = { ...data, accounts: orderedAccounts(data.accounts || []) };
+    state.providerCache[state.provider] = { usage: state.usage, accounts: state.accounts, loaded: !state.accountsLoading };
     renderCards();
     updateRefreshMeta();
     if (data?.accounts?.length && state.view === "login" && !state.loginInfo) {
@@ -802,6 +1083,7 @@
     }
   });
   openusage.onLoginState((st) => {
+    if (isChatgpt()) return;
     if (!st) return;
     $("#login-status").textContent = st.message || st.state;
     if (st.state === "complete") {
@@ -844,6 +1126,11 @@
     document.getElementById("app").classList.toggle("fullscreen", on);
     $("#side-nav").hidden = !on;
   });
+  openusage.onPanelWidthModeChanged?.((mode) => {
+    const value = mode === "manual" ? "manual" : "auto";
+    state.settings = { ...state.settings, panelWidthMode: value };
+    $("#set-panel-width-mode").value = value;
+  });
   openusage.onNavigate((view) => {
     if (view === "settings") setView("settings");
     else if (view === "home") setView("home");
@@ -866,7 +1153,9 @@
 
   // boot
   (async () => {
-    await reloadSettings();
+    const revision = state.providerRevision;
+    await reloadSettings({ restoreProvider: true });
+    if (revision !== state.providerRevision) return;
     // Prefer live sync so CLI accounts appear without extra click
     try {
       const r = await openusage.softImportCli();
@@ -874,8 +1163,11 @@
     } catch (e) {
       console.warn("[boot cli-sync]", e);
     }
+    if (revision !== state.providerRevision) return;
     await reloadAccounts();
+    if (revision !== state.providerRevision) return;
     const st = await openusage.getStatus();
+    if (revision !== state.providerRevision) return;
     if (st.lastUsage) {
       state.usage = st.lastUsage;
       renderCards();
@@ -888,6 +1180,7 @@
         /* ignore */
       }
     }
+    if (revision !== state.providerRevision) return;
     state.fullscreen = !!st.isFullscreen;
     document.getElementById("app").classList.toggle("fullscreen", state.fullscreen);
     $("#side-nav").hidden = !state.fullscreen;

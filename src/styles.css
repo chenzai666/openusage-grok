@@ -22,6 +22,15 @@
   --shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
 }
 
+.provider-tabs { display: flex; gap: 6px; padding: 6px 12px; flex-shrink: 0; border-bottom: 1px solid var(--border); background: var(--bg-elevated); }
+.provider-tab { border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-muted); padding: 6px 12px; cursor: pointer; font: inherit; font-size: 12px; }
+.provider-tab.active { color: var(--text); background: var(--bg-card-hover); border-color: var(--border-strong); }
+.provider-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.reset-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 8px; background: rgba(0,0,0,.25); font-size: 11px; color: var(--text-muted); }
+.reset-row strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.avatar.chatgpt { color: #fff; font-size: 11px; font-weight: 700; letter-spacing: -.5px; }
+.reset-feedback { padding: 8px 12px; font-size: 12px; color: var(--text-muted); }
+
 html.light {
   --bg: #f4f4f5;
   --bg-elevated: #ffffff;
@@ -388,7 +397,10 @@ html.light .icon-btn:hover {
   border-radius: 10px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.04);
+  max-width: 692px;
+  margin-inline: auto;
 }
+.single-account .home-toolbar { max-width: 380px; }
 .home-toolbar[hidden] {
   display: none !important;
 }
@@ -413,29 +425,25 @@ html.light .icon-btn:hover {
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
+  max-width: 380px;
+  margin-inline: auto;
 }
 
 .cards-grid.cols-2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 692px;
 }
-.cards-grid.cols-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-@media (max-width: 700px) {
-  .cards-grid.cols-2,
-  .cards-grid.cols-3 {
+@media (max-width: 659px) {
+  .cards-grid.cols-2 {
     grid-template-columns: 1fr;
+    max-width: 380px;
   }
 }
-
-.app.fullscreen .cards-grid {
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-}
-.app.fullscreen .cards-grid.cols-2,
-.app.fullscreen .cards-grid.cols-3 {
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-}
+.drag-handle { cursor: grab; color: var(--text-muted); user-select: none; flex-shrink: 0; }
+.card-head > .drag-handle { margin-top: 7px; font-size: 17px; }
+.drag-handle:active { cursor: grabbing; }
+.acc-card.dragging, .acc-row.dragging { opacity: 0.45; }
+.acc-card.drag-over, .acc-row.drag-over { outline: 2px solid var(--ok); outline-offset: -2px; }
 
 /* 账号卡片固定深色（与参考图一致），不随外壳浅色主题变白底 */
 .acc-card {
@@ -540,6 +548,29 @@ html.light .avatar {
 .badge.xai {
   background: transparent;
   color: rgba(255, 255, 255, 0.7);
+}
+.badge.chatgpt-plan {
+  font-size: 12px;
+  font-weight: 750;
+  padding: 3px 8px;
+  color: #e6f5ff;
+  border-color: #569cd1;
+  background: #20455f;
+}
+html.light .badge.chatgpt-plan {
+  color: #12456b;
+  border-color: #8ab9db;
+  background: #e2f1fc;
+}
+.card-title.chatgpt-email {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.acc-row .info .email-full {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 .badge.status-ok {
   color: #34d399;
@@ -750,7 +781,8 @@ html.light .unified-note {
   height: 7px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.12);
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 3px;
 }
 .health-dots span.on {
   background: #22c55e;
@@ -762,6 +794,8 @@ html.light .unified-note {
   color: rgba(255, 255, 255, 0.5);
   min-width: 2rem;
   text-align: right;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .footer-meta {

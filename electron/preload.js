@@ -11,6 +11,14 @@ function on(channel, handler) {
 }
 
 contextBridge.exposeInMainWorld("openusage", {
+  chatgptList: () => invoke("chatgpt-list"),
+  chatgptRefresh: () => invoke("chatgpt-refresh"),
+  chatgptRemove: (key) => invoke("chatgpt-remove", key),
+  chatgptActive: (key) => invoke("chatgpt-active", key),
+  chatgptClear: () => invoke("chatgpt-clear"),
+  chatgptImport: (mode, value) => invoke("chatgpt-import", mode, value),
+  chatgptReset: (key) => invoke("chatgpt-reset", key),
+  chatgptReorder: (keys) => invoke("chatgpt-reorder", keys),
   getStatus: () => invoke("get-status"),
   getSettings: () => invoke("get-settings"),
   updateSettings: (partial) => invoke("update-settings", partial),
@@ -53,6 +61,7 @@ contextBridge.exposeInMainWorld("openusage", {
   onThemeChanged: (cb) => on("theme-changed", cb),
   onAccountsChanged: (cb) => on("accounts-changed", cb),
   onFullscreenChanged: (cb) => on("fullscreen-changed", cb),
+  onPanelWidthModeChanged: (cb) => on("panel-width-mode-changed", cb),
   onPanelShown: (cb) => on("panel-shown", cb),
   onNavigate: (cb) => on("navigate", cb),
 });
