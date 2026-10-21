@@ -425,7 +425,8 @@ function updateTrayIcon(percent, usageOverride) {
     const p = show ? display(value) : null;
     target.setImage(createTrayNativeImage(nativeImage, p ?? 0, { size: 32 }));
     target.setToolTip(p == null ? "OpenUsage Grok + ChatGPT" :
-      `OpenUsage ${chat ? "ChatGPT" : "Grok"} · ${label}${suffix} ${p}%${summary.length > 1 ? "\n" + summary.join(" · ") : ""}`);
+      summary.length > 1 ? `OpenUsage ChatGPT\n${summary.join(" · ")}` :
+        `OpenUsage ${chat ? "ChatGPT" : "Grok"} · ${label}${suffix} ${p}%`);
   };
   try {
     paint(tray, weekly != null ? "周限" : primary?.label || "周限", weekly ?? primary?.percent ?? null);

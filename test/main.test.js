@@ -489,9 +489,13 @@ test("Codex has independent primary and weekly tray numbers and complete period 
   await f.invoke("chatgpt-refresh");
   assert.equal(f.trays.length,2);
   assert.equal(f.trays[0].image.percent,45);assert.equal(f.trays[1].image.percent,73);
-  assert.match(f.trays[0].tip,/^OpenUsage ChatGPT · 周限剩余 45%/);
-  assert.match(f.trays[1].tip,/^OpenUsage ChatGPT · 5h剩余 73%/);
-  for(const tray of f.trays){assert.match(tray.tip,/5h剩余 73%/);assert.match(tray.tip,/周限剩余 45%/);}
+  for(const tray of f.trays){
+    assert.equal(tray.tip,"OpenUsage ChatGPT\n5h剩余 73% · 周限剩余 45%");
+    assert.equal((tray.tip.match(/5h/g)||[]).length,1);
+    assert.equal((tray.tip.match(/周限/g)||[]).length,1);
+  }
+  await f.invoke("update-settings",{quotaDisplay:"used"});
+  for(const tray of f.trays)assert.equal(tray.tip,"OpenUsage ChatGPT\n5h已用 27% · 周限已用 55%");
   await f.invoke("update-settings",{quotaDisplay:"used"});
   assert.equal(f.trays.length,2);assert.equal(f.trays[0].image.percent,55);assert.equal(f.trays[1].image.percent,27);
   assert.match(f.trays[0].tip,/周限已用 55%/);assert.match(f.trays[1].tip,/5h已用 27%/);
