@@ -381,6 +381,19 @@ test("saved remaining quota preference is restored at startup",async(t)=>{
   assert.deepEqual(quotaMetric(f,"5h限额"),{text:"剩余 84%",bar:"84%"});
 });
 
+test("Free monthly quota also labels its health row as monthly without inventing a weekly limit",async(t)=>{
+  const f=await fixture(t,{quotaDisplay:"remaining"});
+  f.click("provider-chatgpt");await until(()=>f.doc.querySelector(".avatar.chatgpt"));
+  Object.assign(f.chat.accounts[0],{planName:"Free",weeklyPercent:null,metrics:[{label:"月限额",percent:41}]});
+  f.events.onUsageResult(f.chat);
+  assert.deepEqual(quotaMetric(f,"月限额"),{text:"剩余 59%",bar:"59%"});
+  assert.equal(f.doc.querySelector(".health-label").textContent,"健康状态（月限）");
+  assert.equal(f.doc.querySelector(".health-pct").textContent,"剩余 59%");
+  assert.doesNotMatch(f.doc.querySelector(".acc-card").textContent,/720h|健康状态（周限）/);
+  setQuotaDisplay(f,"used");await until(()=>quotaMetric(f,"月限额").text==="已用 41%");
+  assert.equal(f.doc.querySelector(".health-pct").textContent,"已用 41%");
+});
+
 test("failed quota preference save restores the previous display and reports the error",async(t)=>{
   const f=await fixture(t,{}, {updateSettings:async()=>{throw new Error("模拟设置保存失败");}});
   const control=setQuotaDisplay(f,"remaining");

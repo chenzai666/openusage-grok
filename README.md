@@ -21,6 +21,8 @@ Windows 托盘应用：监控 **Grok / SuperGrok** 和 **ChatGPT / Codex** 多�
 - 默认按账号数量自动收窄：单账号约 400px，多账号约 720px 双列；切换服务同步调整，单卡不再横向拉满
 - 设置可切换自动紧凑 / 手动宽度，手动拖动窗口边缘后保留自定义大小；拖动卡片手柄可排序，Grok 与 ChatGPT 分别保存顺序
 - 设置支持“显示已用额度 / 显示剩余额度”，5h、周限百分比及进度条和托盘同步切换；只调整展示，不改变额度、状态或重置时间
+- Free 的 30 天窗口显示为“月限额”，不再换算成 720h；付费套餐的 5h / 周限标签保持不变
+- Codex 托盘分别显示主窗口（5h / 月限）与周限数字；只有月限的账号显示单个月限图标，Grok 保持单个周限图标
 - 删除本机卡片后保持隐藏，可在设置中手动同步恢复；不删除或修改 CLI 的 `auth.json`
 - 重置卡需要原生确认；请求结果未知时保留幂等编号，后续核对复用同一编号
 
@@ -69,7 +71,7 @@ npm run release   # dist + 复制到 Desktop\OpenUsage-releases\
 2. 使用 `gh` 创建标签触发构建与 Release：
 
 ```bash
-gh api repos/chenzai666/openusage-grok/git/refs -f ref=refs/tags/v0.1.22 -f sha="$(git rev-parse HEAD)"
+gh api repos/chenzai666/openusage-grok/git/refs -f ref=refs/tags/v0.1.23 -f sha="$(git rev-parse HEAD)"
 ```
 
 也可在 Actions 里手动 `workflow_dispatch`。PR 会先测试再构建安装包，不创建正式 Release。

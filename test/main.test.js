@@ -16,7 +16,7 @@ const deferred = () => {
 
 // Load the real IPC registrations with no Electron startup, network, or account I/O.
 function fixture(initial = {}, model = {}) {
-  const handlers = new Map(), sent = [], timeouts = [], images = [], tips = [], layouts = [], errors = [];
+  const handlers = new Map(), sent = [], timeouts = [], images = [], tips = [], layouts = [], errors = [], trays = [], trayLayouts = [];
   const calls = { imports: [], sync: [], refresh: 0, discover: 0, proxy: 0, serviceOptions: null };
   const cfg = { selectedProvider: "grok", theme: "dark", activeEntryKey: "grok:a", panelWidthMode: "auto", ...initial };
   const usage = () => ({ provider: "chatgpt", accounts: [], trayPercent: 66 });
@@ -35,14 +35,17 @@ function fixture(initial = {}, model = {}) {
   class BrowserWindow extends EventEmitter {
     constructor(options) { super(); panel = this; windowOptions = options; this.hidden = 0; this.bounds = {x:0,y:0,width:options.width,height:options.height};this.webContents = { send: (...args) => sent.push(args) }; }
     loadFile() {} setPosition(x,y) {this.bounds.x=x;this.bounds.y=y;} isDestroyed() { return false; }
-    isFocused() { return false; } hide() { this.hidden++; }
+    isFocused() { return false; } hide() { this.hidden++;this.visible=false; }
     getBounds() { return {...this.bounds}; } setBounds(bounds) {this.bounds={...bounds};this.emit("resized");}
     setSize(width,height) {this.bounds.width=width;this.bounds.height=height;this.emit("resized");}
-    setAlwaysOnTop() {} setSkipTaskbar() {} show() {} focus() {}
+    setAlwaysOnTop() {} setSkipTaskbar() {} show() { this.visible=true; } focus() {}
+    isVisible() { return !!this.visible; }
   }
   class Tray extends EventEmitter {
-    setToolTip(value) { tips.push(value); } setImage(value) { images.push(value); }
-    setContextMenu() {}
+    constructor(image, guid) { super();this.image=image;this.guid=guid;this.destroyed=false;this.destroyCalls=0;trays.push(this); }
+    setToolTip(value) { this.tip=value;tips.push(value); } setImage(value) { this.image=value;images.push(value); }
+    setContextMenu(menu) { this.menu=menu; } popUpContextMenu() { this.popup=true; }
+    isDestroyed() { return this.destroyed; } destroy() { this.destroyed=true;this.destroyCalls++; }
   }
   const app = new EventEmitter();
   Object.assign(app, { requestSingleInstanceLock: () => true, quit: () => {}, whenReady: () => ({ then() {} }), getVersion: () => "test" });
@@ -72,12 +75,13 @@ function fixture(initial = {}, model = {}) {
   };
   const context = vm.createContext({
     require: (name) => { if (!Object.hasOwn(modules, name)) throw new Error("Unexpected real module: " + name); return modules[name]; },
-    __dirname: path.dirname(sourcePath), console: { log: (...args) => layouts.push(args), error: (...args) => errors.push(args) },
+    __dirname: path.dirname(sourcePath), console: { log: (...args) => (args[0] === "[tray-layout]" ? trayLayouts : layouts).push(args), error: (...args) => errors.push(args) },
+    process: { platform: model.platform || "win32" },
     setTimeout: (fn) => { timeouts.push(fn); return timeouts.length; }, clearTimeout() {},
     setInterval: () => { throw new Error("startup timers must not run"); }, clearInterval() {},
   });
   vm.runInContext(fs.readFileSync(sourcePath, "utf8") + "\nregisterIpc(); createPanel(); createTray();", context, { filename: sourcePath });
-  return { cfg, service, secure, dialog, billing, calls, sent, images, tips, timeouts, panel, windowOptions, layouts, errors,
+  return { cfg, service, secure, dialog, billing, calls, sent, images, tips, timeouts, panel, windowOptions, layouts, errors, trays, app, trayLayouts,
     invoke: (name, ...args) => handlers.get(name)({}, ...args) };
 }
 
@@ -463,4 +467,131 @@ test("layout diagnostics contain only provider, mode and dimensions and log only
   for(const [name,details] of f.layouts) {
     assert.equal(name,"[panel-layout]");assert.deepEqual(Object.keys(details).sort(),["height","mode","provider","width"]);
   }
+});
+
+function codexTrayFixture(options = {}, cards = [{entryKey:"chatgpt:a",enabled:true,weeklyPercent:55,metrics:[{label:"5h限额",percent:27},{label:"周限额",percent:55}]}]) {
+  const f=fixture({selectedProvider:"chatgpt",quotaDisplay:"remaining",...options});
+  let cached={v:1,provider:"chatgpt",accounts:cards,trayEntryKey:cards[0]?.entryKey||null,trayPercent:cards[0]?.weeklyPercent??null};
+  f.service.list=()=>cached?.accounts||[];
+  f.service.getLastUsage=()=>cached;
+  f.service.refresh=async()=>{f.calls.refresh++;return cached||{v:1,provider:"chatgpt",accounts:[],trayPercent:null};};
+  f.service.remove=(key)=>{cached={...cached,accounts:cached.accounts.filter(card=>card.entryKey!==key)};};
+  f.service.clearAll=()=>{cached=null;};
+  f.service.setActive=(key)=>{
+    cached={...cached,trayEntryKey:key,trayPercent:cached.accounts.find(card=>card.entryKey===key)?.weeklyPercent??null,
+      accounts:cached.accounts.map(card=>({...card,enabled:card.entryKey===key}))};
+  };
+  return {...f,cache:()=>cached,setCache:value=>{cached=value;}};
+}
+
+test("Codex has independent primary and weekly tray numbers and complete period tooltips", async () => {
+  const f=codexTrayFixture();const original=JSON.stringify(f.cache());
+  await f.invoke("chatgpt-refresh");
+  assert.equal(f.trays.length,2);
+  assert.equal(f.trays[0].image.percent,45);assert.equal(f.trays[1].image.percent,73);
+  assert.match(f.trays[0].tip,/^OpenUsage ChatGPT · 周限剩余 45%/);
+  assert.match(f.trays[1].tip,/^OpenUsage ChatGPT · 5h剩余 73%/);
+  for(const tray of f.trays){assert.match(tray.tip,/5h剩余 73%/);assert.match(tray.tip,/周限剩余 45%/);}
+  await f.invoke("update-settings",{quotaDisplay:"used"});
+  assert.equal(f.trays.length,2);assert.equal(f.trays[0].image.percent,55);assert.equal(f.trays[1].image.percent,27);
+  assert.match(f.trays[0].tip,/周限已用 55%/);assert.match(f.trays[1].tip,/5h已用 27%/);
+  assert.equal(JSON.stringify(f.cache()),original);
+});
+
+test("secondary tray is destroyed on provider or visibility changes and keeps a stable Windows GUID", async () => {
+  const f=codexTrayFixture();await f.invoke("chatgpt-refresh");const second=f.trays[1];
+  assert.equal(f.trays[0].guid,undefined);assert.match(second.guid,/^[0-9a-f-]{36}$/);
+  await f.invoke("update-settings",{selectedProvider:"grok"});
+  assert.equal(second.destroyCalls,1);assert.equal(second.eventNames().length,0);
+  await f.invoke("update-settings",{selectedProvider:"chatgpt"});
+  const recreated=f.trays[2];assert.equal(recreated.guid,second.guid);
+  await f.invoke("update-settings",{trayShowPercent:false});
+  assert.equal(recreated.destroyCalls,1);assert.equal(f.trays[0].image.percent,0);
+  assert.doesNotMatch(f.trays[0].tip,/\d+%/);
+  await f.invoke("update-settings",{trayShowPercent:true});assert.equal(f.trays.length,4);
+  assert.equal(f.trays[3].guid,second.guid);
+});
+
+test("Free monthly-only quota reuses the main tray instead of creating an empty weekly icon", async () => {
+  const f=codexTrayFixture({},[{entryKey:"chatgpt:free",enabled:true,planName:"Free",weeklyPercent:null,metrics:[{label:"月限额",percent:31}]}]);
+  await f.invoke("chatgpt-refresh");assert.equal(f.trays.length,1);
+  assert.equal(f.trays[0].image.percent,69);assert.match(f.trays[0].tip,/月限剩余 69%/);
+  assert.doesNotMatch(f.trays[0].tip,/周限|5h|720h/);
+  await f.invoke("update-settings",{quotaDisplay:"used"});assert.equal(f.trays[0].image.percent,31);assert.match(f.trays[0].tip,/月限已用 31%/);
+});
+
+test("both Codex tray values follow the enabled account and handle endpoints and unknown primary data", async () => {
+  const f=codexTrayFixture({},[
+    {entryKey:"chatgpt:a",enabled:true,weeklyPercent:55,metrics:[{label:"5h限额",percent:0}]},
+    {entryKey:"chatgpt:b",enabled:false,weeklyPercent:0,metrics:[{label:"5h限额",percent:100}]},
+  ]);
+  await f.invoke("chatgpt-refresh");assert.equal(f.trays[1].image.percent,100);
+  await f.invoke("chatgpt-active","chatgpt:b");
+  assert.equal(f.trays[0].image.percent,100);assert.equal(f.trays[1].image.percent,0);
+  const second=f.trays[1];
+  for(const value of [null,undefined,NaN,Infinity,"0"]){
+    f.setCache({v:1,provider:"chatgpt",accounts:[{entryKey:"chatgpt:b",enabled:true,weeklyPercent:20,metrics:[{label:"5h限额",percent:value}]}],trayEntryKey:"chatgpt:b",trayPercent:20});
+    await f.invoke("chatgpt-refresh");assert.equal(second.destroyCalls,1);assert.equal(f.trays[0].image.percent,80);
+    assert.doesNotMatch(f.trays[0].tip,/5h|100%/);
+  }
+  assert.equal(f.trays.length,2);
+});
+
+test("remove and clear discard the previous account's secondary icon before a slow refresh finishes", async () => {
+  for(const channel of ["chatgpt-remove","chatgpt-clear"]){
+    const f=codexTrayFixture();await f.invoke("chatgpt-refresh");const second=f.trays[1];
+    const pending=deferred();f.service.refresh=()=>pending.promise;
+    const result=f.invoke(channel,"chatgpt:a");
+    assert.equal(second.destroyCalls,1);assert.equal(f.trays[0].image.percent,0);assert.doesNotMatch(f.trays[0].tip,/\d+%/);
+    pending.resolve({v:1,provider:"chatgpt",accounts:[],trayPercent:null});await result;
+    assert.equal(second.destroyCalls,1);
+  }
+});
+
+test("both tray icons share one-click panel and right-click menu behavior without duplicate listeners", async () => {
+  const f=codexTrayFixture();await f.invoke("chatgpt-refresh");await f.invoke("chatgpt-refresh");
+  assert.equal(f.trays.length,2);
+  for(const tray of f.trays){
+    assert.equal(tray.listenerCount("click"),1);assert.equal(tray.listenerCount("right-click"),1);
+    tray.emit("right-click");assert.equal(tray.popup,true);assert.deepEqual(plain(tray.menu.map(item=>item.label).filter(Boolean)),["显示详情","全屏工作台","设置","刷新用量","退出"]);
+    f.panel.visible=false;tray.emit("click");assert.equal(f.panel.visible,true);
+    tray.emit("click");assert.equal(f.panel.visible,false);
+  }
+});
+
+test("quitting destroys both trays once and late refresh completion cannot recreate them", async () => {
+  const f=codexTrayFixture();await f.invoke("chatgpt-refresh");
+  f.app.emit("before-quit");
+  for(const tray of f.trays){assert.equal(tray.destroyCalls,1);assert.equal(tray.eventNames().length,0);}
+  await f.invoke("chatgpt-refresh");assert.equal(f.trays.length,2);
+  f.app.emit("before-quit");for(const tray of f.trays)assert.equal(tray.destroyCalls,1);
+});
+
+test("non-Windows secondary tray omits Windows-only identity and cache errors release secondary resources", async () => {
+  const f=fixture({selectedProvider:"chatgpt"},{platform:"linux"});
+  const raw={v:1,provider:"chatgpt",trayEntryKey:"chatgpt:a",trayPercent:20,accounts:[{entryKey:"chatgpt:a",weeklyPercent:20,metrics:[{label:"5h限额",percent:30}]}]};
+  f.service.list=()=>raw.accounts;f.service.refresh=async()=>raw;f.service.getLastUsage=()=>raw;
+  await f.invoke("chatgpt-refresh");assert.equal(f.trays[1].guid,undefined);
+  f.service.getLastUsage=()=>{throw new Error("mock cache unavailable");};
+  await f.invoke("update-settings",{quotaDisplay:"remaining"});
+  assert.equal(f.trays[1].destroyCalls,1);assert.equal(f.trays.length,2);
+  assert.equal(f.trays[0].image.percent,0);assert.doesNotMatch(f.trays[0].tip,/\d+%/);
+  assert.match(f.errors.at(-1).join(" "),/mock cache unavailable/);
+});
+
+test("active-account cache failure immediately clears the previous account's tray values", async () => {
+  const f=codexTrayFixture();await f.invoke("chatgpt-refresh");
+  f.service.getLastUsage=()=>{throw new Error("mock active cache unavailable");};
+  await f.invoke("chatgpt-active","chatgpt:a");
+  assert.equal(f.trays[1].destroyCalls,1);assert.equal(f.trays[0].image.percent,0);
+  assert.doesNotMatch(f.trays[0].tip,/\d+%/);assert.match(f.errors.at(-1).join(" "),/mock active cache unavailable/);
+});
+
+test("tray layout diagnostics log only period combination changes and contain no account data", async () => {
+  const f=codexTrayFixture();await f.invoke("chatgpt-refresh");
+  assert.deepEqual(plain(f.trayLayouts),[["[tray-layout]",{provider:"chatgpt",periods:["周限","5h"],quotaDisplay:"remaining"}]]);
+  await f.invoke("chatgpt-refresh");await f.invoke("update-settings",{quotaDisplay:"used"});assert.equal(f.trayLayouts.length,1);
+  f.setCache({v:1,provider:"chatgpt",accounts:[{entryKey:"chatgpt:private",weeklyPercent:null,metrics:[{label:"月限额",percent:20}]}],trayEntryKey:"chatgpt:private",trayPercent:null});
+  await f.invoke("chatgpt-refresh");assert.deepEqual(plain(f.trayLayouts.at(-1)),["[tray-layout]",{provider:"chatgpt",periods:["月限"],quotaDisplay:"used"}]);
+  assert.ok(!JSON.stringify(f.trayLayouts).includes("chatgpt:private"));
 });

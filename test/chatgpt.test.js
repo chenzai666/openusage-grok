@@ -253,6 +253,46 @@ test("primary limit uses its duration, defaults to 5h, and keeps weekly labeling
   }
 });
 
+test("Free 720-hour windows display monthly quota without changing usage or reset data", async (t) => {
+  const f=fixture(t);f.service.importDocuments([encode(auth())]);
+  for(const plan of ["free","Free"," FREE "]) {
+    const data={plan_type:plan,rate_limit:{primary_window:{used_percent:41,limit_window_seconds:2592000,reset_at:1792591200},secondary_window:{used_percent:27,reset_at:1792504800}}};
+    const before=encode(data);f.respond(()=>({status:200,ok:true,data}));
+    const card=(await f.service.refresh()).accounts[0];
+    assert.equal(card.planName,"Free");
+    assert.deepEqual(card.metrics,[
+      {label:"月限额",percent:41,resetAt:new Date(data.rate_limit.primary_window.reset_at*1000).toISOString()},
+      {label:"周限额",percent:27,resetAt:new Date(data.rate_limit.secondary_window.reset_at*1000).toISOString()},
+    ]);
+    assert.equal(card.weeklyPercent,27);assert.equal(card.status,"正常");
+    assert.equal(encode(data),before);assert.ok(!encode(card).includes("720h"));
+  }
+});
+
+test("Free plan fallback uses monthly quota when its primary duration is missing or invalid", async (t) => {
+  const f=fixture(t);f.service.importDocuments([encode(auth("free",{plan_type:"free"}))]);
+  for(const seconds of [undefined,null,0,-1,NaN,"2592000"]) {
+    for(const plan of [undefined,""]) {
+      f.respond(()=>({status:200,ok:true,data:{plan_type:plan,rate_limit:{primary_window:{used_percent:12,limit_window_seconds:seconds}}}}));
+      const card=(await f.service.refresh()).accounts[0];
+      assert.equal(card.planName,"Free");assert.equal(card.metrics[0].label,"月限额");
+      assert.equal(card.metrics[0].percent,12);assert.equal(card.weeklyPercent,null);
+    }
+  }
+});
+
+test("explicit short Free windows and paid-plan quota labels retain their reported durations", async (t) => {
+  const f=fixture(t);f.service.importDocuments([encode(auth())]);
+  for(const plan of ["free","plus","team"]) {
+    for(const [seconds,label] of [[18000,"5h限额"],[10800,"3h限额"]]) {
+      f.respond(()=>({status:200,ok:true,data:{plan_type:plan,rate_limit:{primary_window:{used_percent:7,limit_window_seconds:seconds},secondary_window:{used_percent:19}}}}));
+      const card=(await f.service.refresh()).accounts[0];
+      assert.deepEqual(card.metrics.map(metric=>metric.label),[label,"周限额"]);
+      assert.equal(card.metrics[0].percent,7);assert.equal(card.weeklyPercent,19);
+    }
+  }
+});
+
 test("plan display normalizes known names and preserves unknown subscriptions", async (t) => {
   const f=fixture(t);f.service.importDocuments([encode(auth("a",{plan_type:"team"}))]);
   for(const [value,expected] of [["team","Team"],[" PLUS ","Plus"],["pro","Pro"],["free","Free"],["enterprise","Enterprise"],["business","Business"],["edu","Edu"],["go","Go"],["Future Custom","Future Custom"],["","Team"],[undefined,"Team"]]) {

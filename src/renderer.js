@@ -155,7 +155,7 @@
     return percent == null ? "暂无额度数据" : `${label} ${Math.round(percent)}%`;
   }
 
-  function healthDotsHtml(percent) {
+  function healthDotsHtml(percent, period = "周限") {
     const total = 18;
     const pct =
       percent == null || !Number.isFinite(percent)
@@ -169,8 +169,8 @@
       dots += `<span class="${i < filled ? "on" : ""}"></span>`;
     }
     const label = pct == null ? "—" : quotaText(pct);
-    return `<div class="health" title="健康点阵表示周限剩余额度">
-      <span class="health-label">健康状态（周限）</span>
+    return `<div class="health" title="健康点阵表示${esc(period)}剩余额度">
+      <span class="health-label">健康状态（${esc(period)}）</span>
       <div class="health-dots">${dots}</div>
       <span class="health-pct">${esc(label)}</span>
     </div>`;
@@ -344,6 +344,7 @@
   function renderChatgptCard(acc) {
     const plan = String(acc.planName || "ChatGPT / Codex").replace(/\b(team|plus|pro|business|enterprise|free|edu)\b/gi, (s) => s[0].toUpperCase() + s.slice(1).toLowerCase());
     const email = acc.emailDisplay || acc.title || acc.emailMasked || "ChatGPT 账号";
+    const monthly = !Number.isFinite(acc.weeklyPercent) && (acc.metrics || []).find((m) => m.label === "月限额");
     const metrics = (acc.metrics || []).map((m) => metric(m.label, quotaText(m.percent) + (m.resetAt ? " · 重置 " + formatTime(m.resetAt) : ""), quotaPercent(m.percent), !Number.isFinite(m.percent))).join("");
     return `<article class="acc-card" data-key="${esc(acc.entryKey)}" draggable="true">
       <div class="card-body"><div class="card-head">
@@ -354,7 +355,7 @@
           <div class="card-title ${state.settings?.showFullEmails ? "chatgpt-email" : ""}">${esc(email)}</div></div>
       </div><div class="plan-line">${esc(acc.source || "ChatGPT / Codex")}${acc.refreshedAt ? " · 刷新 " + esc(acc.refreshedAt) : ""}</div>
       ${acc.error ? `<div class="unified-note"><span class="uni-ico">ⓘ</span><span>${esc(acc.error)}</span></div>` : ""}</div>
-      <div class="card-metrics">${healthDotsHtml(acc.weeklyPercent)}
+      <div class="card-metrics">${monthly ? healthDotsHtml(monthly.percent, "月限") : healthDotsHtml(acc.weeklyPercent)}
         <div class="reset-row"><span>额度重置卡 <strong>${acc.resetCount == null ? "待查询" : esc(acc.resetCount) + " 张"}</strong></span>
           <button type="button" class="btn sm" data-act="reset-credit" ${state.resetBusy || (acc.resetCount === 0 && !acc.pendingReset) || acc.error ? "disabled" : ""}>${acc.pendingReset ? "核对重置结果" : acc.resetCount === 0 ? "无可用重置卡" : "使用重置卡"}</button></div>
         ${metrics || '<p class="muted sm">暂无额度数据，请导入有效 OAuth 账号后刷新。</p>'}

@@ -37,6 +37,9 @@ const ALLOWED_EXTERNAL = [
 ];
 
 let tray = null;
+let primaryTray = null;
+const PRIMARY_TRAY_GUID = "c16bfd14-b7f7-46d4-919b-f04e71902a25";
+let lastTrayLayoutSignature = "";
 let panel = null;
 let isQuitting = false;
 let isFullscreen = false;
@@ -144,7 +147,7 @@ async function refreshChatgpt() {
   if (!refreshed) return refreshChatgpt();
   const result = orderedUsage("chatgpt", refreshed);
   syncPanelSize();
-  if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(result.trayPercent);
+  if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(result.trayPercent, result);
   if (panel && !panel.isDestroyed()) panel.webContents.send("usage-result", result);
   return result;
 }
@@ -366,20 +369,81 @@ function setFullscreenMode(on) {
   panel.webContents.send("fullscreen-changed", isFullscreen);
 }
 
-function updateTrayIcon(percent) {
-  if (!tray) return;
+function destroyPrimaryTray() {
+  if (!primaryTray) return;
+  primaryTray.removeAllListeners();
+  if (!primaryTray.isDestroyed()) primaryTray.destroy();
+  primaryTray = null;
+}
+
+function cachedTrayUsage(provider) {
+  try { return provider === "chatgpt" ? chatgpt.getLastUsage() : lastUsage; }
+  catch (e) {
+    console.error("tray cache", e.message);
+    if (provider === "chatgpt" && settings.load().selectedProvider === "chatgpt") updateTrayIcon(null, null);
+    return null;
+  }
+}
+
+function logTrayLayout(cfg, periods) {
+  const provider = cfg.selectedProvider === "chatgpt" ? "chatgpt" : "grok";
+  const signature = provider + ":" + periods.join(",");
+  if (signature === lastTrayLayoutSignature) return;
+  lastTrayLayoutSignature = signature;
+  console.log("[tray-layout]", { provider, periods, quotaDisplay: cfg.quotaDisplay === "remaining" ? "remaining" : "used" });
+}
+
+function updateTrayIcon(percent, usageOverride) {
+  if (!tray || isQuitting) return;
   const cfg = settings.load();
   const show = cfg.trayShowPercent !== false;
   const remaining = cfg.quotaDisplay === "remaining";
-  const used = percent != null && Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null;
-  const p = show && used != null ? Math.round(remaining ? 100 - used : used) : null;
+  const valid = (value) => Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null;
+  const display = (value) => value == null ? null : Math.round(remaining ? 100 - value : value);
+  const chat = cfg.selectedProvider === "chatgpt";
+  let primary = null;
+  let weekly = valid(percent);
+  if (chat && show) {
+    const usage = arguments.length >= 2 ? usageOverride : cachedTrayUsage("chatgpt");
+    const cards = Array.isArray(usage?.accounts) ? usage.accounts : [];
+    const account = cards.find((card) => card.entryKey === usage?.trayEntryKey) || cards.find((card) => card.enabled) || cards[0];
+    if (account && !account.error) {
+      const metrics = Array.isArray(account.metrics) ? account.metrics : [];
+      weekly = valid(account.weeklyPercent) ?? valid(metrics.find((metric) => metric.label === "周限额")?.percent);
+      const window = metrics.find((metric) => /^(?:月限额|(?:\d+(?:\.\d+)?(?:h|min))+限额)$/.test(metric.label) && valid(metric.percent) != null);
+      if (window) primary = { label: window.label === "月限额" ? "月限" : window.label.replace(/限额$/, ""), percent: valid(window.percent) };
+    } else if (account?.error || usage == null || usage.v === 1) {
+      // Real empty/deleted accounts must not retain a previous account's percentage.
+      weekly = null;
+    }
+  }
+  const summary = [];
+  const suffix = remaining ? "剩余" : "已用";
+  if (primary) summary.push(`${primary.label}${suffix} ${display(primary.percent)}%`);
+  if (weekly != null) summary.push(`周限${suffix} ${display(weekly)}%`);
+  const paint = (target, label, value) => {
+    const p = show ? display(value) : null;
+    target.setImage(createTrayNativeImage(nativeImage, p ?? 0, { size: 32 }));
+    target.setToolTip(p == null ? "OpenUsage Grok + ChatGPT" :
+      `OpenUsage ${chat ? "ChatGPT" : "Grok"} · ${label}${suffix} ${p}%${summary.length > 1 ? "\n" + summary.join(" · ") : ""}`);
+  };
   try {
-    const img = createTrayNativeImage(nativeImage, p != null ? p : 0, { size: 32 });
-    tray.setImage(img);
-    tray.setToolTip(
-      p != null ? `OpenUsage ${cfg.selectedProvider === "chatgpt" ? "ChatGPT" : "Grok"} · 周限${remaining ? "剩余" : "已用"} ${p}%` : "OpenUsage Grok + ChatGPT"
-    );
+    paint(tray, weekly != null ? "周限" : primary?.label || "周限", weekly ?? primary?.percent ?? null);
+    if (chat && show && primary && weekly != null) {
+      if (!primaryTray) {
+        // A stable Windows GUID preserves the user's notification-area preference.
+        primaryTray = new Tray(createTrayNativeImage(nativeImage, display(primary.percent), { size: 32 }),
+          ...(process.platform === "win32" ? [PRIMARY_TRAY_GUID] : []));
+        bindTrayEvents(primaryTray);
+      }
+      paint(primaryTray, primary.label, primary.percent);
+    } else destroyPrimaryTray();
+    const periods = [];
+    if (show && weekly != null) periods.push("周限");
+    if (show && primary) periods.push(primary.label);
+    logTrayLayout(cfg, periods);
   } catch (e) {
+    destroyPrimaryTray();
     console.error("tray icon", e);
   }
 }
@@ -426,12 +490,9 @@ function buildTrayMenu() {
   ]);
 }
 
-function createTray() {
-  const img = createTrayNativeImage(nativeImage, 0, { size: 32 });
-  tray = new Tray(img);
-  tray.setToolTip("OpenUsage Grok");
-  tray.setContextMenu(buildTrayMenu());
-  tray.on("click", () => {
+function bindTrayEvents(target) {
+  target.setContextMenu(buildTrayMenu());
+  target.on("click", () => {
     if (!panel || panel.isDestroyed()) {
       showPanel();
       return;
@@ -443,10 +504,17 @@ function createTray() {
       showPanel();
     }
   });
-  tray.on("right-click", () => {
-    tray.setContextMenu(buildTrayMenu());
-    tray.popUpContextMenu();
+  target.on("right-click", () => {
+    target.setContextMenu(buildTrayMenu());
+    target.popUpContextMenu();
   });
+}
+
+function createTray() {
+  const img = createTrayNativeImage(nativeImage, 0, { size: 32 });
+  tray = new Tray(img);
+  tray.setToolTip("OpenUsage Grok");
+  bindTrayEvents(tray);
 }
 
 async function refreshAll(opts = {}) {
@@ -536,7 +604,7 @@ function registerIpc() {
   ipcMain.handle("chatgpt-reorder", async (_e, keys) => {
     if (!Array.isArray(keys)) throw new Error("账号排序必须是有效编号数组");
     accountOrder("chatgpt", keys);
-    const result = orderedUsage("chatgpt", chatgpt.getLastUsage());
+    const result = orderedUsage("chatgpt", cachedTrayUsage("chatgpt"));
     if (result) panel?.webContents.send("usage-result", result);
     notifyAccountsChanged();
     return true;
@@ -544,14 +612,18 @@ function registerIpc() {
   ipcMain.handle("chatgpt-remove", async (_e, key) => {
     if (typeof key !== "string") throw new Error("账号编号无效");
     chatgpt.remove(key);
+    if (settings.load().selectedProvider === "chatgpt") {
+      const usage = cachedTrayUsage("chatgpt");
+      updateTrayIcon(usage?.trayPercent ?? null, usage);
+    }
     notifyAccountsChanged();
     return refreshChatgpt();
   });
   ipcMain.handle("chatgpt-active", async (_e, key) => {
     chatgpt.setActive(key);
-    const result = orderedUsage("chatgpt", chatgpt.getLastUsage());
+    const result = orderedUsage("chatgpt", cachedTrayUsage("chatgpt"));
     if (result) {
-      if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(result.trayPercent);
+      if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(result.trayPercent, result);
       panel?.webContents.send("usage-result", result);
     }
     notifyAccountsChanged();
@@ -559,6 +631,7 @@ function registerIpc() {
   });
   ipcMain.handle("chatgpt-clear", async () => {
     chatgpt.clearAll();
+    if (settings.load().selectedProvider === "chatgpt") updateTrayIcon(null, null);
     notifyAccountsChanged();
     return refreshChatgpt();
   });
@@ -613,7 +686,7 @@ function registerIpc() {
       accountCount: accounts.length,
       activeEntryKey: cfg.activeEntryKey,
       lastUsage: orderedUsage("grok", lastUsage),
-      chatgptLastUsage: orderedUsage("chatgpt", chatgpt.getLastUsage()),
+      chatgptLastUsage: orderedUsage("chatgpt", cachedTrayUsage("chatgpt")),
       paths: {
         appData: appDataRoot(),
         accounts: accountsPath(),
@@ -661,8 +734,8 @@ function registerIpc() {
       }
     }
     if (partial && ("trayShowPercent" in partial || "selectedProvider" in partial || "quotaDisplay" in partial)) {
-      const usage = next.selectedProvider === "chatgpt" ? chatgpt.getLastUsage() : lastUsage;
-      updateTrayIcon(usage?.trayPercent ?? null);
+      const usage = cachedTrayUsage(next.selectedProvider);
+      updateTrayIcon(usage?.trayPercent ?? null, usage);
     }
     if (
       partial &&
@@ -1088,6 +1161,12 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  destroyPrimaryTray();
+  if (tray) {
+    tray.removeAllListeners();
+    if (!tray.isDestroyed()) tray.destroy();
+    tray = null;
+  }
   if (refreshTimer) clearInterval(refreshTimer);
   if (loginPollTimer) clearInterval(loginPollTimer);
 });
